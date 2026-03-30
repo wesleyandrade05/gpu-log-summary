@@ -1,0 +1,41 @@
+cluster:
+  node_name: gpu003
+  gpu_count: 8
+  gpu_model: "NVIDIA H200"
+
+collection:
+  interval_seconds: 300  # 5 minutes
+  db_path: "data/metrics.db"
+  log_sources:
+    - path: "/var/log/fabricmanager.log"
+      type: "fabricmanager"
+    - path: "/var/log/nvidia-dcgm/"
+      type: "dcgm"
+    - path: "/var/log/ibacm.log"
+      type: "infiniband"
+
+llm:
+  base_url: "http://localhost:30000/v1"
+  model: "Qwen/Qwen3.5-397B-A17B"
+  max_tokens: 4096
+  temperature: 0.3
+
+analysis:
+  anomaly:
+    gpu_temp_warn: 75      # Celsius
+    gpu_temp_critical: 83
+    gpu_power_warn_pct: 90  # % of TDP (700W)
+    gpu_memory_warn_pct: 95 # % of total VRAM
+    ecc_error_threshold: 1
+    zscore_threshold: 3.0
+    lookback_hours: 24
+  correlation:
+    time_window_seconds: 300  # events within 5 min are correlated
+
+reports:
+  output_dir: "reports"
+  format: "markdown"  # markdown or pdf
+
+dashboard:
+  host: "0.0.0.0"
+  port: 8050
