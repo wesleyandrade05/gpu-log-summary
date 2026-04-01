@@ -5,6 +5,7 @@ Usage:
     python -m src.cli collect          # Run one collection cycle
     python -m src.cli show             # Show latest metrics
     python -m src.cli show --events    # Show recent log events
+    python -m src.cli analyze          # Run anomaly detection + correlation
     python -m src.cli status           # Show database stats
     python -m src.cli summarize        # Generate LLM summary (Week 3)
     python -m src.cli dashboard        # Start web dashboard (Week 4)
@@ -156,6 +157,59 @@ def show(events, hours, gpu_index, limit):
             headers = ["GPU", "Timestamp", "Util", "Memory", "Temp", "Power", "DBE", "Throttle"]
             click.echo(f"\n GPU Snapshots (last {hours}h)")
             click.echo(tabulate(table_data, headers=headers, tablefmt="simple"))
+    finally:
+        db.close()
+
+
+@cli.command()
+@click.option("--hours", default=24, help="Lookback window in hours")
+@click.option("--correlate/--no-correlate", default=True, help="Run event correlation")
+def analyze(hours, correlate):
+    """Run anomaly detection and event correlation on collected data."""
+    from src.analysis.anomaly import run_anomaly_detection
+    from src.analysis.correlator import correlate_events, format_clusters_for_llm
+
+    config = _load_config()
+    db = _get_db(config)
+
+    try:
+        now = datetime.now(timezone.utc)
+        start = (now - timedelta(hours=hours)).isoformat()
+        end = now.isoformat()
+
+        gpu_snaps = db.get_gpu_snapshots(start=start, end=end, limit=10000)
+        sys_snaps = db.get_system_snapshots(start=start, end=end, limit=10000)
+
+        if not gpu_snaps and not sys_snaps:
+            click.echo("No data found. Run 'collect' first.")
+            return
+
+        anomalies = run_anomaly_detection(gpu_snaps, sys_snaps, config)
+
+        if anomalies:
+            anomaly_dicts = [a.to_dict() for a in anomalies]
+            count = db.insert_anomalies(anomaly_dicts)
+            click.echo(f"\nDetected {count} anomalies:")
+            for a in anomalies:
+                icon = {"critical": "!!", "warning": "! ", "info": "  "}.get(a.severity, "  ")
+                gpu_tag = f" [GPU {a.gpu_index}]" if a.gpu_index is not None else ""
+                click.echo(f"  [{icon}] {a.severity.upper():8s}{gpu_tag} {a.description}")
+        else:
+            click.echo("\nNo anomalies detected — all metrics within normal ranges.")
+
+        if correlate:
+            log_events = db.get_log_events(start=start, end=end, limit=500)
+            anomaly_dicts = [a.to_dict() for a in anomalies] if anomalies else []
+            corr_config = config.get("analysis", {}).get("correlation", {})
+            window = corr_config.get("time_window_seconds", 300)
+
+            clusters = correlate_events(anomaly_dicts, log_events, window)
+            if clusters:
+                click.echo(f"\nCorrelated into {len(clusters)} incident cluster(s):")
+                for c in clusters:
+                    click.echo(f"  {c.summary}")
+            else:
+                click.echo("\nNo correlated incidents found.")
     finally:
         db.close()
 
