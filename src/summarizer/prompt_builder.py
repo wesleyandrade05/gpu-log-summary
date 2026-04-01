@@ -26,6 +26,18 @@ Your summaries must:
 6. Use exact metric values and timestamps — never be vague
 7. End with a brief forward-looking risk assessment
 
+Data quality rules (critical):
+- Respect the **Data quality** section in the user message. If samples per GPU are \
+very low (e.g. 1–3), state clearly that conclusions are limited and do NOT claim \
+definitive diagnoses such as "hung job" or "deadlock" — phrase them as hypotheses.
+- High VRAM usage with low GPU utilization in a snapshot often reflects a loaded \
+inference server (e.g. vLLM) between requests, not necessarily a stuck training job.
+- Host CPU percentage may be misleading on sparse or single-point samples; prefer \
+load averages and multiple samples when drawing conclusions.
+
+Keep the full report complete: finish every section including Risk Assessment. \
+Prefer shorter paragraphs over hitting output limits.
+
 Format the output as a well-structured Markdown report with clear section headers.
 Do NOT include any preamble like "Here is the summary" — start directly with the report.\
 """
@@ -59,6 +71,7 @@ def build_daily_summary_prompt(
         data_sources.append("multi-node GPU metrics via SSH")
 
     sections.append(_build_header(period_start, period_end, data_sources))
+    sections.append(_build_data_quality_section(gpu_stats, system_snapshots))
     sections.append(_build_gpu_stats_section(gpu_stats))
     sections.append(_build_system_stats_section(system_snapshots))
 
@@ -93,6 +106,48 @@ def _build_header(start: str, end: str, data_sources: Optional[list[str]] = None
         f"**Period:** {start[:19]} to {end[:19]} UTC\n"
         f"**Data sources:** {sources}"
     )
+
+
+def _build_data_quality_section(
+    gpu_stats: list[dict],
+    system_snapshots: list[dict],
+) -> str:
+    """Tell the model how sparse the data is so it avoids over-confident diagnoses."""
+    if not gpu_stats:
+        return "## Data quality\nNo GPU aggregate rows; treat the window as data-sparse."
+
+    counts = [int(g.get("sample_count") or 0) for g in gpu_stats]
+    min_s = min(counts) if counts else 0
+    max_s = max(counts) if counts else 0
+    sys_n = len(system_snapshots)
+
+    lines = [
+        "## Data quality (read this first)\n",
+        f"- **GPU metric samples in this window:** min {min_s}, max {max_s} per GPU "
+        f"(from the `Samples` column below).",
+        f"- **System snapshots in this window:** {sys_n}.",
+    ]
+
+    if min_s <= 2:
+        lines.append(
+            "- **Sparse data:** With only one or two samples per GPU, you MUST NOT "
+            "state as fact that workloads are hung, deadlocked, or mis-scheduled. "
+            "Offer **possible explanations** (including idle inference with a loaded "
+            "model) and recommend collecting more frequent samples or checking "
+            "`nvidia-smi` / process lists on the node."
+        )
+    elif min_s < 12:
+        lines.append(
+            "- **Moderate sampling:** Trends are somewhat visible; still avoid "
+            "absolute claims without corroborating log or alert evidence."
+        )
+    else:
+        lines.append(
+            "- **Sampling:** Enough points for basic trend discussion; still "
+            "correlate with logs and alerts when available."
+        )
+
+    return "\n".join(lines)
 
 
 def _build_gpu_stats_section(gpu_stats: list[dict]) -> str:
@@ -315,8 +370,10 @@ def _build_task_instruction() -> str:
         "5. **NVLink & Fabric Health** — any interconnect issues?\n"
         "6. **System Resources** — CPU, memory, or I/O bottlenecks?\n"
         "7. **Recommendations** — specific, prioritized actions\n"
-        "8. **Risk Assessment** — what might go wrong in the next 24 hours based on trends\n\n"
-        "Use exact values and timestamps. Be concise but thorough."
+        "8. **Risk Assessment** — what might go wrong in the next 24 hours based on trends "
+        "(keep this section to a short paragraph; do not truncate mid-sentence)\n\n"
+        "Use exact values and timestamps. If **Data quality** indicates sparse samples, "
+        "say so explicitly and keep speculation clearly labeled as hypothesis."
     )
 
 
