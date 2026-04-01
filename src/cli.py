@@ -7,8 +7,8 @@ Usage:
     python -m src.cli show --events    # Show recent log events
     python -m src.cli analyze          # Run anomaly detection + correlation
     python -m src.cli status           # Show database stats
-    python -m src.cli summarize        # Generate LLM summary (Week 3)
-    python -m src.cli dashboard        # Start web dashboard (Week 4)
+    python -m src.cli summarize        # Generate LLM summary
+    python -m src.cli probe            # Check which data sources are reachable
 """
 
 import json
@@ -51,11 +51,12 @@ def cli():
 
 
 @cli.command()
-@click.option("--gpu/--no-gpu", default=True, help="Collect GPU metrics")
+@click.option("--gpu/--no-gpu", default=True, help="Collect local GPU metrics")
 @click.option("--system/--no-system", default=True, help="Collect system metrics")
 @click.option("--logs/--no-logs", default=True, help="Parse log files")
-def collect(gpu, system, logs):
-    """Run one data collection cycle (GPU metrics, system metrics, log events)."""
+@click.option("--remote/--no-remote", default=True, help="Collect from remote sources")
+def collect(gpu, system, logs, remote):
+    """Run one data collection cycle from all available sources."""
     config = _load_config()
     db = _get_db(config)
 
@@ -64,14 +65,13 @@ def collect(gpu, system, logs):
             from src.collectors.gpu_metrics import collect_gpu_metrics
             snapshots = collect_gpu_metrics()
             count = db.insert_gpu_snapshots(snapshots)
-            click.echo(f"Collected {count} GPU snapshots ({len(snapshots)} GPUs)")
+            click.echo(f"[GPU] Collected {count} snapshots ({len(snapshots)} GPUs)")
 
         if system:
             from src.collectors.system_metrics import collect_system_metrics
             sys_snap = collect_system_metrics()
             db.insert_system_snapshot(sys_snap)
-            click.echo(f"Collected system metrics (CPU: {sys_snap.cpu_percent}%, "
-                        f"MEM: {sys_snap.memory_percent}%)")
+            click.echo(f"[System] CPU: {sys_snap.cpu_percent}%, MEM: {sys_snap.memory_percent}%")
 
         if logs:
             from src.collectors.log_parser import (
@@ -98,10 +98,39 @@ def collect(gpu, system, logs):
             events, fm_bm, ib_bm = collect_all_log_events(fm_bm, ib_bm)
             if events:
                 db.insert_log_events(events)
-            click.echo(f"Parsed {len(events)} new log events")
+            click.echo(f"[Logs] Parsed {len(events)} new log events")
 
             db.save_bookmark("fabricmanager", fm_bm.path, fm_bm.offset, fm_bm.inode)
             db.save_bookmark("infiniband", ib_bm.path, ib_bm.offset, ib_bm.inode)
+
+        if remote:
+            from src.collectors.prometheus import collect_prometheus_metrics
+            prom_results = collect_prometheus_metrics(config)
+            if prom_results:
+                db.insert_prometheus_snapshots(prom_results)
+                click.echo(f"[Prometheus] Collected {len(prom_results)} metric queries")
+
+            from src.collectors.alertmanager import collect_alerts
+            alert_events = collect_alerts(config)
+            if alert_events:
+                db.insert_log_events(alert_events)
+                click.echo(f"[AlertManager] {len(alert_events)} firing alerts")
+
+            from src.collectors.redfish import collect_redfish_data
+            rf_snap, rf_events = collect_redfish_data(config)
+            if rf_snap:
+                db.insert_redfish_snapshot(rf_snap)
+                click.echo(f"[Redfish] {len(rf_snap.chassis_temps)} temps, "
+                            f"{len(rf_snap.fan_readings)} fans, {len(rf_events)} SEL events")
+            if rf_events:
+                db.insert_log_events(rf_events)
+
+            from src.collectors.multinode import collect_multinode_metrics
+            mn_results = collect_multinode_metrics(config)
+            if mn_results:
+                total_gpus = sum(len(v) for v in mn_results.values())
+                db.insert_multinode_snapshots(mn_results)
+                click.echo(f"[Multi-node] {len(mn_results)} nodes, {total_gpus} GPUs")
 
         click.echo("Collection complete.")
     finally:
@@ -262,6 +291,9 @@ def summarize(hours, dry_run):
         gpu_stats = db.get_gpu_stats_summary(start, end)
         sys_snaps = db.get_system_snapshots(start=start, end=end, limit=10000)
         log_events = db.get_log_events(start=start, end=end, limit=200)
+        prom_data = db.get_prometheus_snapshots(start=start, end=end)
+        rf_data = db.get_redfish_snapshots(start=start, end=end, limit=5)
+        mn_stats = db.get_multinode_stats_summary(start, end)
 
         anomaly_objs = run_anomaly_detection(gpu_snaps, sys_snaps, config)
         anomalies = [a.to_dict() for a in anomaly_objs]
@@ -278,6 +310,9 @@ def summarize(hours, dry_run):
             period_start=start,
             period_end=end,
             incident_clusters=clusters,
+            prometheus_data=prom_data,
+            redfish_data=rf_data,
+            multinode_stats=mn_stats,
         )
 
         if dry_run:
@@ -333,24 +368,88 @@ def summarize(hours, dry_run):
 
 
 @cli.command()
-@click.option("--host", default=None, help="Dashboard host")
-@click.option("--port", default=None, type=int, help="Dashboard port")
-def dashboard(host, port):
-    """Start the web dashboard (requires Week 4 modules)."""
-    try:
-        from src.dashboard.app import create_app
-    except ImportError:
-        click.echo("Dashboard module not yet implemented. Coming in Week 4.")
-        return
-
+def probe():
+    """Check which data sources are currently reachable."""
     config = _load_config()
-    dash_config = config.get("dashboard", {})
-    h = host or dash_config.get("host", "0.0.0.0")
-    p = port or dash_config.get("port", 8050)
 
-    app = create_app(config)
-    click.echo(f"Starting dashboard at http://{h}:{p}")
-    app.run(host=h, port=p, debug=False)
+    def _status(ok, detail=""):
+        return f"OK{' (' + detail + ')' if detail else ''}" if ok else f"SKIP ({detail})"
+
+    # Local GPU
+    try:
+        from src.collectors.gpu_metrics import _try_pynvml
+        import subprocess
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=count", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=5,
+        )
+        gpu_ok = result.returncode == 0
+        gpu_count = len(result.stdout.strip().split("\n")) if gpu_ok else 0
+        click.echo(f"  GPU (local nvidia-smi) .... {_status(gpu_ok, f'{gpu_count} GPUs')}")
+    except Exception:
+        click.echo(f"  GPU (local nvidia-smi) .... {_status(False, 'nvidia-smi not found')}")
+
+    # System
+    try:
+        import psutil
+        click.echo(f"  System (psutil) ........... {_status(True)}")
+    except ImportError:
+        click.echo(f"  System (psutil) ........... {_status(False, 'psutil not installed')}")
+
+    # Logs
+    log_sources = config.get("collection", {}).get("log_sources", [])
+    for ls in log_sources:
+        path = ls.get("path", "")
+        readable = os.path.isfile(path) and os.access(path, os.R_OK)
+        click.echo(f"  Logs ({ls.get('type', '?'):15s}) .. {_status(readable, path)}")
+
+    # Prometheus
+    from src.collectors.prometheus import probe as prom_probe
+    prom_url = config.get("prometheus", {}).get("url", "")
+    prom_ok = prom_probe(prom_url) if prom_url else False
+    prom_detail = "url not configured" if not prom_url else (prom_url if prom_ok else "unreachable")
+    click.echo(f"  Prometheus ................ {_status(prom_ok, prom_detail)}")
+
+    # AlertManager
+    from src.collectors.alertmanager import probe as am_probe
+    am_url = config.get("alertmanager", {}).get("url", "")
+    am_ok = am_probe(am_url) if am_url else False
+    am_detail = "url not configured" if not am_url else (am_url if am_ok else "unreachable")
+    click.echo(f"  AlertManager .............. {_status(am_ok, am_detail)}")
+
+    # Redfish
+    from src.collectors.redfish import probe as rf_probe
+    rf_config = config.get("redfish", {})
+    rf_url = rf_config.get("url", "")
+    rf_ok = rf_probe(rf_url, rf_config.get("username", ""), rf_config.get("password", "")) if rf_url else False
+    rf_detail = "url not configured" if not rf_url else (rf_url if rf_ok else "unreachable")
+    click.echo(f"  Redfish ................... {_status(rf_ok, rf_detail)}")
+
+    # Multi-node SSH
+    from src.collectors.multinode import probe_node
+    mn_nodes = config.get("multinode", {}).get("nodes", [])
+    mn_timeout = config.get("multinode", {}).get("ssh_timeout", 5)
+    reachable = []
+    for node in mn_nodes:
+        if probe_node(node, timeout=mn_timeout):
+            reachable.append(node)
+    mn_detail = f"{len(reachable)}/{len(mn_nodes)} nodes reachable"
+    if reachable:
+        mn_detail += f" ({', '.join(reachable)})"
+    click.echo(f"  Multi-node SSH ............ {_status(bool(reachable), mn_detail)}")
+
+    # LLM
+    try:
+        from src.summarizer.llm_client import LLMClient
+        llm_config = config.get("llm", {})
+        client = LLMClient(
+            base_url=llm_config.get("base_url", "http://localhost:30000/v1"),
+            model=llm_config.get("model", "Qwen/Qwen3.5-397B-A17B"),
+        )
+        llm_ok = client.health_check()
+        click.echo(f"  LLM (vLLM) ................ {_status(llm_ok, client.model)}")
+    except Exception as e:
+        click.echo(f"  LLM (vLLM) ................ {_status(False, str(e))}")
 
 
 if __name__ == "__main__":
