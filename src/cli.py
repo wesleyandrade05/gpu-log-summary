@@ -237,15 +237,16 @@ def status():
 
 @cli.command()
 @click.option("--hours", default=24, help="Summary lookback window in hours")
-def summarize(hours):
-    """Generate an LLM-powered daily summary (requires Week 3 modules)."""
-    try:
-        from src.summarizer.llm_client import LLMClient
-        from src.summarizer.prompt_builder import build_daily_summary_prompt
-        from src.summarizer.report_generator import generate_report
-    except ImportError:
-        click.echo("Summarizer modules not yet implemented. Coming in Week 3.")
-        return
+@click.option("--dry-run", is_flag=True, help="Print the prompt without calling the LLM")
+def summarize(hours, dry_run):
+    """Generate an LLM-powered daily summary."""
+    from src.summarizer.llm_client import LLMClient
+    from src.summarizer.prompt_builder import (
+        build_daily_summary_prompt, get_system_prompt,
+    )
+    from src.summarizer.report_generator import generate_report
+    from src.analysis.anomaly import run_anomaly_detection
+    from src.analysis.correlator import correlate_events
 
     config = _load_config()
     db = _get_db(config)
@@ -255,10 +256,19 @@ def summarize(hours):
         start = (now - timedelta(hours=hours)).isoformat()
         end = now.isoformat()
 
+        click.echo(f"Gathering data for {hours}h window: {start[:19]} → {end[:19]} UTC")
+
+        gpu_snaps = db.get_gpu_snapshots(start=start, end=end, limit=10000)
         gpu_stats = db.get_gpu_stats_summary(start, end)
+        sys_snaps = db.get_system_snapshots(start=start, end=end, limit=10000)
         log_events = db.get_log_events(start=start, end=end, limit=200)
-        anomalies = db.get_anomalies(start=start, end=end)
-        sys_snaps = db.get_system_snapshots(start=start, end=end, limit=50)
+
+        anomaly_objs = run_anomaly_detection(gpu_snaps, sys_snaps, config)
+        anomalies = [a.to_dict() for a in anomaly_objs]
+
+        corr_config = config.get("analysis", {}).get("correlation", {})
+        window = corr_config.get("time_window_seconds", 300)
+        clusters = correlate_events(anomalies, log_events, window)
 
         prompt = build_daily_summary_prompt(
             gpu_stats=gpu_stats,
@@ -267,7 +277,17 @@ def summarize(hours):
             system_snapshots=sys_snaps,
             period_start=start,
             period_end=end,
+            incident_clusters=clusters,
         )
+
+        if dry_run:
+            click.echo(f"\n{'='*80}")
+            click.echo(" DRY RUN — Prompt that would be sent to the LLM:")
+            click.echo(f"{'='*80}")
+            click.echo(f"\n[SYSTEM]\n{get_system_prompt()}\n")
+            click.echo(f"[USER]\n{prompt}")
+            click.echo(f"\nPrompt length: {len(prompt):,} chars")
+            return
 
         llm_config = config.get("llm", {})
         client = LLMClient(
@@ -277,7 +297,8 @@ def summarize(hours):
             temperature=llm_config.get("temperature", 0.3),
         )
 
-        result = client.generate_summary(prompt)
+        click.echo("Sending to LLM... (this may take 30-120 seconds)")
+        result = client.generate_summary(prompt, system_prompt=get_system_prompt())
 
         report_config = config.get("reports", {})
         report_path = generate_report(
@@ -285,6 +306,7 @@ def summarize(hours):
             period_start=start,
             period_end=end,
             output_dir=report_config.get("output_dir", "reports"),
+            node_name=config.get("cluster", {}).get("node_name", "gpu003"),
         )
 
         db.insert_summary({
@@ -298,9 +320,14 @@ def summarize(hours):
             "completion_tokens": result.get("completion_tokens"),
         })
 
+        if anomalies:
+            db.insert_anomalies(anomalies)
+
         click.echo(f"\nSummary generated: {report_path}")
-        click.echo(f"Tokens used: {result.get('prompt_tokens', '?')} prompt + "
+        click.echo(f"Tokens: {result.get('prompt_tokens', '?')} prompt + "
                     f"{result.get('completion_tokens', '?')} completion")
+        click.echo(f"Latency: {result.get('latency_seconds', '?')}s")
+        click.echo(f"Anomalies: {len(anomalies)}, Incidents: {len(clusters)}")
     finally:
         db.close()
 
