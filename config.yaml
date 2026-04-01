@@ -34,8 +34,39 @@ analysis:
 
 reports:
   output_dir: "reports"
-  format: "markdown"  # markdown or pdf
 
-dashboard:
-  host: "0.0.0.0"
-  port: 8050
+prometheus:
+  enabled: true
+  url: ""  # e.g. "http://master.cluster.local:9090"
+  queries:
+    - name: "gpu_temperature"
+      promql: "DCGM_FI_DEV_GPU_TEMP"
+    - name: "gpu_utilization"
+      promql: "DCGM_FI_DEV_GPU_UTIL"
+    - name: "gpu_memory_used"
+      promql: "DCGM_FI_DEV_FB_USED"
+    - name: "gpu_power_draw"
+      promql: "DCGM_FI_DEV_POWER_USAGE"
+    - name: "node_cpu_usage"
+      promql: '100 - (avg by(instance)(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)'
+    - name: "node_memory_available"
+      promql: "node_memory_MemAvailable_bytes"
+
+alertmanager:
+  enabled: true
+  url: ""  # e.g. "http://master.cluster.local:9093"
+
+redfish:
+  enabled: true
+  url: ""  # e.g. "https://bmc-gpu003/redfish/v1"
+  username: ""
+  password: ""
+
+multinode:
+  enabled: true
+  nodes:
+    - gpu002
+    - gpu004
+    - gpu005
+    - gpu008
+  ssh_timeout: 5

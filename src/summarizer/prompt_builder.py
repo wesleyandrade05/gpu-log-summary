@@ -39,17 +39,38 @@ def build_daily_summary_prompt(
     period_start: str,
     period_end: str,
     incident_clusters: Optional[list] = None,
+    prometheus_data: Optional[list[dict]] = None,
+    redfish_data: Optional[list[dict]] = None,
+    multinode_stats: Optional[list[dict]] = None,
 ) -> str:
     """Build the full prompt for a daily summary.
 
-    Assembles GPU stats, anomalies, log events, and system metrics into
-    a structured context block that the LLM can reason over.
+    Assembles GPU stats, anomalies, log events, system metrics, and optional
+    Prometheus/Redfish/multi-node data into a structured context block.
     """
     sections = []
 
-    sections.append(_build_header(period_start, period_end))
+    data_sources = ["nvidia-smi/pynvml GPU metrics", "Fabric Manager logs", "system metrics (psutil)"]
+    if prometheus_data:
+        data_sources.append("Prometheus cluster metrics")
+    if redfish_data:
+        data_sources.append("Redfish BMC hardware telemetry")
+    if multinode_stats:
+        data_sources.append("multi-node GPU metrics via SSH")
+
+    sections.append(_build_header(period_start, period_end, data_sources))
     sections.append(_build_gpu_stats_section(gpu_stats))
     sections.append(_build_system_stats_section(system_snapshots))
+
+    if multinode_stats:
+        sections.append(_build_multinode_section(multinode_stats))
+
+    if prometheus_data:
+        sections.append(_build_prometheus_section(prometheus_data))
+
+    if redfish_data:
+        sections.append(_build_redfish_section(redfish_data))
+
     sections.append(_build_anomalies_section(anomalies))
     sections.append(_build_log_events_section(log_events))
 
@@ -64,13 +85,13 @@ def build_daily_summary_prompt(
     return prompt
 
 
-def _build_header(start: str, end: str) -> str:
+def _build_header(start: str, end: str, data_sources: Optional[list[str]] = None) -> str:
+    sources = ", ".join(data_sources) if data_sources else "nvidia-smi/pynvml, logs, psutil"
     return (
         f"## Cluster Telemetry Data\n"
-        f"**Node:** gpu003 (8x NVIDIA H200, 143GB VRAM each, NVLink/NVSwitch interconnect)\n"
+        f"**Primary Node:** gpu003 (8x NVIDIA H200, 143GB VRAM each, NVLink/NVSwitch)\n"
         f"**Period:** {start[:19]} to {end[:19]} UTC\n"
-        f"**Data sources:** nvidia-smi/pynvml GPU metrics, Fabric Manager logs, "
-        f"system metrics (psutil)"
+        f"**Data sources:** {sources}"
     )
 
 
@@ -176,6 +197,99 @@ def _build_log_events_section(events: list[dict]) -> str:
         lines.append("\n### Warnings")
         for e in warns[:15]:
             lines.append(f"- [{e['source']}] {e['timestamp']}: {e['message'][:200]}")
+
+    return "\n".join(lines)
+
+
+def _build_prometheus_section(prom_data: list[dict]) -> str:
+    """Format Prometheus query results for the prompt."""
+    if not prom_data:
+        return ""
+
+    lines = ["## Prometheus Cluster Metrics\n"]
+    for item in prom_data:
+        name = item.get("query_name", "unknown")
+        results = item.get("results", [])
+        if not results:
+            continue
+        lines.append(f"### {name} ({item.get('promql', '')})")
+        for r in results[:10]:
+            metric_labels = r.get("metric", {})
+            value = r.get("value", [None, "?"])
+            val_str = value[1] if isinstance(value, list) and len(value) > 1 else str(value)
+            label_str = ", ".join(f"{k}={v}" for k, v in metric_labels.items()
+                                  if k != "__name__")
+            lines.append(f"- {label_str}: **{val_str}**")
+        if len(results) > 10:
+            lines.append(f"- ... and {len(results) - 10} more results")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def _build_redfish_section(rf_data: list[dict]) -> str:
+    """Format Redfish BMC data for the prompt."""
+    if not rf_data:
+        return ""
+
+    latest = rf_data[0]
+    lines = ["## Redfish BMC Hardware Telemetry\n"]
+
+    temps = latest.get("chassis_temps", [])
+    if temps:
+        lines.append("### Chassis Temperatures")
+        for t in temps:
+            status = t.get("status", "")
+            reading = t.get("reading_c")
+            if reading is not None:
+                warn = f" (warning: {t['upper_warning']}C)" if t.get("upper_warning") else ""
+                lines.append(f"- {t.get('name', '?')}: **{reading}C** [{status}]{warn}")
+
+    fans = latest.get("fan_readings", [])
+    if fans:
+        lines.append("\n### Fan Status")
+        for f in fans:
+            lines.append(f"- {f.get('name', '?')}: {f.get('reading_rpm', '?')} RPM [{f.get('status', '')}]")
+
+    psu = latest.get("power_supplies", [])
+    if psu:
+        lines.append("\n### Power Supplies")
+        for p in psu:
+            lines.append(f"- {p.get('name', '?')}: {p.get('power_output_w', '?')}W "
+                         f"[{p.get('status', '')}]")
+
+    sel = latest.get("sel_entries", [])
+    if sel:
+        lines.append(f"\n### System Event Log ({len(sel)} events)")
+        for s in sel[:10]:
+            lines.append(f"- [{s.get('severity', '?')}] {s.get('created', '?')}: "
+                         f"{s.get('message', '')}")
+
+    return "\n".join(lines)
+
+
+def _build_multinode_section(mn_stats: list[dict]) -> str:
+    """Format multi-node GPU stats for the prompt."""
+    if not mn_stats:
+        return ""
+
+    lines = ["## Multi-Node GPU Overview (remote nodes via SSH)\n"]
+    lines.append("| Node | GPU | Name | Samples | Avg Util% | Max Temp C | "
+                 "Avg Power W | DBE Errors |")
+    lines.append("|------|-----|------|---------|-----------|------------|"
+                 "-------------|------------|")
+
+    for g in mn_stats:
+        lines.append(
+            f"| {g.get('node', '?')} "
+            f"| {g.get('gpu_index', '?')} "
+            f"| {g.get('name', '?')[:20]} "
+            f"| {g.get('sample_count', 0)} "
+            f"| {g.get('avg_gpu_util', 0):.1f} "
+            f"| {g.get('max_temp', 0)} "
+            f"| {g.get('avg_power', 0):.0f} "
+            f"| {g.get('total_dbe', 0)} |"
+        )
 
     return "\n".join(lines)
 

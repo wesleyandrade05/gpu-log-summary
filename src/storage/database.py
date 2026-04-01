@@ -115,6 +115,47 @@ CREATE TABLE IF NOT EXISTS bookmarks (
     file_offset INTEGER DEFAULT 0,
     file_inode INTEGER DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS prometheus_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    query_name TEXT NOT NULL,
+    promql TEXT NOT NULL,
+    results TEXT DEFAULT '[]'
+);
+
+CREATE INDEX IF NOT EXISTS idx_prom_ts ON prometheus_snapshots(timestamp);
+
+CREATE TABLE IF NOT EXISTS redfish_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    chassis_temps TEXT DEFAULT '[]',
+    fan_readings TEXT DEFAULT '[]',
+    power_supplies TEXT DEFAULT '[]',
+    sel_entries TEXT DEFAULT '[]'
+);
+
+CREATE INDEX IF NOT EXISTS idx_rf_ts ON redfish_snapshots(timestamp);
+
+CREATE TABLE IF NOT EXISTS multinode_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    node TEXT NOT NULL,
+    gpu_index INTEGER NOT NULL,
+    uuid TEXT,
+    name TEXT,
+    gpu_util_pct REAL,
+    memory_util_pct REAL,
+    memory_used_mib INTEGER,
+    memory_total_mib INTEGER,
+    temperature_c INTEGER,
+    power_draw_w REAL,
+    power_limit_w REAL,
+    ecc_dbe_volatile INTEGER DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_mn_ts ON multinode_snapshots(timestamp);
+CREATE INDEX IF NOT EXISTS idx_mn_node ON multinode_snapshots(node);
 """
 
 
@@ -405,7 +446,154 @@ class MetricsDB:
     def get_row_counts(self) -> dict:
         """Quick summary of how much data is stored."""
         counts = {}
-        for table in ["gpu_snapshots", "system_snapshots", "log_events", "anomalies", "summaries"]:
+        for table in ["gpu_snapshots", "system_snapshots", "log_events", "anomalies",
+                       "summaries", "prometheus_snapshots", "redfish_snapshots",
+                       "multinode_snapshots"]:
             row = self.conn.execute(f"SELECT COUNT(*) as cnt FROM {table}").fetchone()
             counts[table] = row["cnt"]
         return counts
+
+    # -- Prometheus snapshots --
+
+    def insert_prometheus_snapshots(self, results: list) -> int:
+        rows = []
+        for r in results:
+            d = r.to_dict() if hasattr(r, "to_dict") else r
+            rows.append((
+                d["timestamp"], d["query_name"], d["promql"],
+                json.dumps(d.get("results", [])),
+            ))
+        self.conn.executemany(
+            """INSERT INTO prometheus_snapshots (timestamp, query_name, promql, results)
+               VALUES (?,?,?,?)""",
+            rows,
+        )
+        self.conn.commit()
+        return len(rows)
+
+    def get_prometheus_snapshots(
+        self, start: Optional[str] = None, end: Optional[str] = None, limit: int = 200,
+    ) -> list[dict]:
+        query = "SELECT * FROM prometheus_snapshots WHERE 1=1"
+        params = []
+        if start:
+            query += " AND timestamp >= ?"
+            params.append(start)
+        if end:
+            query += " AND timestamp <= ?"
+            params.append(end)
+        query += " ORDER BY timestamp DESC LIMIT ?"
+        params.append(limit)
+        rows = self.conn.execute(query, params).fetchall()
+        results = []
+        for r in rows:
+            d = dict(r)
+            d["results"] = json.loads(d["results"])
+            results.append(d)
+        return results
+
+    # -- Redfish snapshots --
+
+    def insert_redfish_snapshot(self, snapshot) -> None:
+        d = snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot
+        self.conn.execute(
+            """INSERT INTO redfish_snapshots
+               (timestamp, chassis_temps, fan_readings, power_supplies, sel_entries)
+               VALUES (?,?,?,?,?)""",
+            (
+                d["timestamp"],
+                json.dumps(d.get("chassis_temps", [])),
+                json.dumps(d.get("fan_readings", [])),
+                json.dumps(d.get("power_supplies", [])),
+                json.dumps(d.get("sel_entries", [])),
+            ),
+        )
+        self.conn.commit()
+
+    def get_redfish_snapshots(
+        self, start: Optional[str] = None, end: Optional[str] = None, limit: int = 50,
+    ) -> list[dict]:
+        query = "SELECT * FROM redfish_snapshots WHERE 1=1"
+        params = []
+        if start:
+            query += " AND timestamp >= ?"
+            params.append(start)
+        if end:
+            query += " AND timestamp <= ?"
+            params.append(end)
+        query += " ORDER BY timestamp DESC LIMIT ?"
+        params.append(limit)
+        rows = self.conn.execute(query, params).fetchall()
+        results = []
+        for r in rows:
+            d = dict(r)
+            for key in ("chassis_temps", "fan_readings", "power_supplies", "sel_entries"):
+                d[key] = json.loads(d[key])
+            results.append(d)
+        return results
+
+    # -- Multi-node snapshots --
+
+    def insert_multinode_snapshots(self, node_data: dict) -> int:
+        """Insert multi-node GPU snapshots. node_data: {hostname: [RemoteGpuSnapshot, ...]}"""
+        rows = []
+        for hostname, snapshots in node_data.items():
+            for s in snapshots:
+                d = s.to_dict() if hasattr(s, "to_dict") else s
+                rows.append((
+                    d["timestamp"], d["node"], d["gpu_index"], d.get("uuid", ""),
+                    d.get("name", ""), d.get("gpu_util_pct", 0), d.get("memory_util_pct", 0),
+                    d.get("memory_used_mib", 0), d.get("memory_total_mib", 0),
+                    d.get("temperature_c", 0), d.get("power_draw_w", 0),
+                    d.get("power_limit_w", 0), d.get("ecc_dbe_volatile", 0),
+                ))
+        self.conn.executemany(
+            """INSERT INTO multinode_snapshots
+               (timestamp, node, gpu_index, uuid, name, gpu_util_pct, memory_util_pct,
+                memory_used_mib, memory_total_mib, temperature_c, power_draw_w,
+                power_limit_w, ecc_dbe_volatile)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            rows,
+        )
+        self.conn.commit()
+        return len(rows)
+
+    def get_multinode_snapshots(
+        self, start: Optional[str] = None, end: Optional[str] = None,
+        node: Optional[str] = None, limit: int = 1000,
+    ) -> list[dict]:
+        query = "SELECT * FROM multinode_snapshots WHERE 1=1"
+        params = []
+        if start:
+            query += " AND timestamp >= ?"
+            params.append(start)
+        if end:
+            query += " AND timestamp <= ?"
+            params.append(end)
+        if node:
+            query += " AND node = ?"
+            params.append(node)
+        query += " ORDER BY timestamp DESC LIMIT ?"
+        params.append(limit)
+        return [dict(r) for r in self.conn.execute(query, params).fetchall()]
+
+    def get_multinode_stats_summary(self, start: str, end: str) -> list[dict]:
+        """Get per-node, per-GPU aggregate stats for remote nodes."""
+        rows = self.conn.execute(
+            """SELECT
+                node, gpu_index, name,
+                COUNT(*) as sample_count,
+                AVG(gpu_util_pct) as avg_gpu_util,
+                MAX(gpu_util_pct) as max_gpu_util,
+                AVG(temperature_c) as avg_temp,
+                MAX(temperature_c) as max_temp,
+                AVG(power_draw_w) as avg_power,
+                MAX(power_draw_w) as max_power,
+                SUM(ecc_dbe_volatile) as total_dbe
+            FROM multinode_snapshots
+            WHERE timestamp >= ? AND timestamp <= ?
+            GROUP BY node, gpu_index
+            ORDER BY node, gpu_index""",
+            (start, end),
+        ).fetchall()
+        return [dict(r) for r in rows]
