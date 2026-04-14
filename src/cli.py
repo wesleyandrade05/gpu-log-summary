@@ -110,6 +110,22 @@ def collect(gpu, system, logs, remote):
                 db.insert_prometheus_snapshots(prom_results)
                 click.echo(f"[Prometheus] Collected {len(prom_results)} metric queries")
 
+            # S3-based Prometheus snapshots
+            from src.collectors.s3_prometheus import (
+                collect_s3_prometheus,
+                probe as s3_prom_probe,
+            )
+            s3_config = config.get("prometheus_s3", {})
+            if s3_config.get("enabled", False) and s3_config.get("bucket", ""):
+                s3_bm = db.get_bookmark("prometheus_s3")
+                last_key = s3_bm["file_path"] if s3_bm else ""
+                s3_results, new_last_key = collect_s3_prometheus(config, last_key=last_key)
+                if s3_results:
+                    db.insert_prometheus_snapshots(s3_results)
+                    click.echo(f"[Prometheus S3] Collected {len(s3_results)} metric results")
+                if new_last_key and new_last_key != last_key:
+                    db.save_bookmark("prometheus_s3", new_last_key, 0, 0)
+
             from src.collectors.alertmanager import collect_alerts
             alert_events = collect_alerts(config)
             if alert_events:
@@ -403,12 +419,20 @@ def probe():
         readable = os.path.isfile(path) and os.access(path, os.R_OK)
         click.echo(f"  Logs ({ls.get('type', '?'):15s}) .. {_status(readable, path)}")
 
-    # Prometheus
+    # Prometheus (direct)
     from src.collectors.prometheus import probe as prom_probe
     prom_url = config.get("prometheus", {}).get("url", "")
     prom_ok = prom_probe(prom_url) if prom_url else False
     prom_detail = "url not configured" if not prom_url else (prom_url if prom_ok else "unreachable")
-    click.echo(f"  Prometheus ................ {_status(prom_ok, prom_detail)}")
+    click.echo(f"  Prometheus (direct) ....... {_status(prom_ok, prom_detail)}")
+
+    # Prometheus (S3)
+    from src.collectors.s3_prometheus import probe as s3_prom_probe
+    s3_config = config.get("prometheus_s3", {})
+    s3_bucket = s3_config.get("bucket", "")
+    s3_ok = s3_prom_probe(config) if s3_bucket else False
+    s3_detail = "bucket not configured" if not s3_bucket else (f"s3://{s3_bucket}" if s3_ok else "unreachable")
+    click.echo(f"  Prometheus (S3) ........... {_status(s3_ok, s3_detail)}")
 
     # AlertManager
     from src.collectors.alertmanager import probe as am_probe

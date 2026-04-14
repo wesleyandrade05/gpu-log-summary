@@ -52,6 +52,13 @@ prometheus:
     - name: "node_memory_available"
       promql: "node_memory_MemAvailable_bytes"
 
+prometheus_s3:
+  enabled: true
+  bucket: ""              # e.g. "gpu-cluster-prometheus-snapshots"
+  prefix: ""              # e.g. "gpu003/" or "snapshots/daily/"
+  region: "us-east-1"     # AWS region
+  endpoint_url: ""        # Leave empty for AWS S3; set for MinIO/Ceph
+
 alertmanager:
   enabled: true
   url: ""  # e.g. "http://master.cluster.local:9093"

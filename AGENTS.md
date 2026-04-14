@@ -31,10 +31,21 @@ Working today:
 - Cron helper scripts
 
 Partially implemented, but only active when cluster access is available:
-- Prometheus collector
+- Prometheus collector (direct API)
+- Prometheus S3 snapshot collector (awaiting S3 bucket access)
 - AlertManager collector
 - Redfish collector
 - Multi-node SSH collector
+
+## Development Environment
+
+This project is developed and tested on the GPU cluster, **not locally**.
+
+- Code is edited on a local machine (or via an IDE with remote extensions).
+- All testing and runtime execution happens on the cluster node (`gpu003`) via SSH.
+- The user accesses the cluster through an SSH session in the browser.
+- **Agents must never attempt to run project code, install dependencies, create virtual environments, or execute tests in the local editing environment.** All commands must be run by the user on the cluster.
+- When tests or validation are needed, provide the exact commands and instruct the user to run them on the cluster.
 
 ## Important Cluster Facts
 
@@ -49,14 +60,15 @@ Known environment from testing:
   - `/var/log/nvidia-dcgm/` exists but is usually empty
 
 Known access gaps at the time of writing:
-- Prometheus URL not yet configured / not reachable from `gpu003`
+- Direct Prometheus endpoint not reachable from `gpu003` — **S3 snapshot path confirmed instead** (awaiting bucket access)
 - AlertManager URL not yet configured / not reachable from `gpu003`
 - Redfish URL not yet configured / not reachable from `gpu003`
 - SSH access to other GPU nodes not yet working from `gpu003`
 - `kubectl` access still unavailable
+- S3 bucket for Prometheus snapshots not yet provisioned
 
 The code is already written so these sources are optional:
-- If a URL is empty or a service is unreachable, the collector should skip cleanly.
+- If a URL is empty, a bucket is unconfigured, or a service is unreachable, the collector should skip cleanly.
 
 ## File Structure
 
@@ -135,9 +147,18 @@ Collectors ingest data from different sources.
   - Produces normalized `LogEvent` objects.
 
 - `prometheus.py`
-  - Optional Prometheus collector.
+  - Optional Prometheus collector (direct API).
   - Intended to query cluster-wide metrics through PromQL.
   - Skips automatically if URL is unset or unreachable.
+  - Note: direct Prometheus access is unlikely; prefer the S3 path below.
+
+- `s3_prometheus.py`
+  - S3-based Prometheus snapshot collector.
+  - Downloads JSON metric snapshots deposited by the cluster admin into an S3 bucket.
+  - Outputs `PrometheusResult` objects identical to `prometheus.py`, so storage and downstream pipeline are shared.
+  - Uses `boto3` for S3 access.
+  - Supports bookmark-based deduplication to avoid re-processing files.
+  - Skips automatically if bucket is unconfigured or unreachable.
 
 - `alertmanager.py`
   - Optional AlertManager collector.
@@ -250,12 +271,18 @@ Why:
 - Gives signal on cluster networking / RDMA-related issues.
 - Useful once multi-node workloads are considered.
 
-### 5. Prometheus metrics (planned / optional)
+### 5. Prometheus metrics via S3 (planned / in progress)
 
 Why:
 - Best source for cluster-wide and historical metrics.
 - Lets us summarize beyond a single node.
 - Important for future KPIs like utilization, capacity, and cluster health trends.
+
+Access path:
+- Direct Prometheus endpoint is not reachable from `gpu003`.
+- The cluster admin will provide an S3 bucket containing Prometheus metric snapshots (JSON format).
+- The `s3_prometheus.py` collector downloads and parses these snapshots.
+- Awaiting: bucket name, prefix, and IAM credentials from the admin.
 
 ### 6. AlertManager alerts (planned / optional)
 
@@ -362,8 +389,10 @@ These are the remaining access items needed to make the product fuller and more 
 
 ### Needed access
 
-- **Prometheus endpoint URL**
-  - Needed for cluster-wide metrics and PromQL-based summaries.
+- **S3 bucket for Prometheus snapshots** (highest priority)
+  - Bucket name, prefix, and IAM credentials.
+  - Direct Prometheus API access confirmed as unavailable; S3 is the agreed path.
+  - Code is ready in `s3_prometheus.py` — just needs config values.
 
 - **AlertManager endpoint URL**
   - Needed to pull currently firing alerts.
@@ -377,10 +406,16 @@ These are the remaining access items needed to make the product fuller and more 
 - **Optional: kubectl / kubeconfig**
   - Not strictly required for the current report-first product, but useful if we later want Kubernetes object context.
 
-### Once access is available
+### Once S3 access is available
 
 Update `config.yaml`:
-- `prometheus.url`
+- `prometheus_s3.bucket`
+- `prometheus_s3.prefix`
+- Ensure AWS credentials are available (env vars, IAM role, or `~/.aws/credentials`)
+
+### Once other access is available
+
+Update `config.yaml`:
 - `alertmanager.url`
 - `redfish.url`
 - `redfish.username`
@@ -413,3 +448,5 @@ If you are an agent working on this repo:
 - Treat optional collectors as probe-based integrations that must fail gracefully.
 - Be careful not to let the LLM make claims stronger than the data supports.
 - If the user asks about cluster specifics, ask them to run commands on the cluster and paste the results back.
+- **Do not run code, tests, pip install, or create virtual environments locally.** All execution happens on the remote cluster. Provide commands for the user to run.
+- When tests need to be verified, give the user the exact commands and expected output.
