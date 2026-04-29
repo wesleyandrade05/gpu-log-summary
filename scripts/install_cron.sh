@@ -14,7 +14,7 @@ CRON_COLLECT="*/5 * * * * $COLLECT"
 CRON_SUMMARIZE="0 */12 * * * $SUMMARIZE"
 
 # Append to crontab without duplicating existing entries
-(crontab -l 2>/dev/null || true) | grep -v "run_collect.sh" | grep -v "run_summarize.sh" > /tmp/gpu_cron_tmp
+(crontab -l 2>/dev/null || true) | grep -v "run_collect.sh" | grep -v "run_summarize.sh" > /tmp/gpu_cron_tmp || true
 echo "$CRON_COLLECT" >> /tmp/gpu_cron_tmp
 echo "$CRON_SUMMARIZE" >> /tmp/gpu_cron_tmp
 crontab /tmp/gpu_cron_tmp
