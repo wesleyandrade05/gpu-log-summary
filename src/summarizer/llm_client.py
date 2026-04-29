@@ -47,15 +47,27 @@ class LLMClient:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
+        requested_max = max_tokens or self.max_tokens
         t0 = time.time()
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                max_tokens=max_tokens or self.max_tokens,
+                max_tokens=requested_max,
                 temperature=temperature if temperature is not None else self.temperature,
             )
         except Exception as e:
+            err_str = str(e)
+            if "maximum context length" in err_str or "input_tokens" in err_str:
+                logger.error(
+                    "Prompt too long for context window. "
+                    "Reduce max_tokens in config.yaml or shorten the prompt window. "
+                    "Error: %s", e,
+                )
+                raise RuntimeError(
+                    f"Context window exceeded: prompt is too long for max_tokens={requested_max}. "
+                    "Try reducing --hours or lowering max_tokens in config.yaml."
+                ) from e
             logger.error("LLM request failed: %s", e)
             raise
 
