@@ -1,64 +1,133 @@
 # GPU Cluster Log Summarizer
 
-Automated AIOps pipeline that collects GPU metrics and logs from an NVIDIA H200
-cluster node, detects anomalies, and generates LLM-powered daily summaries via
-an on-cluster Qwen3.5-397B model served by vLLM.
+Automated report-first AIOps pipeline for GPU infrastructure. The project
+collects telemetry from a GPU cluster node, stores structured context in
+SQLite, detects anomalies, correlates related events, and generates Markdown
+reports through an on-cluster vLLM-served `Qwen/Qwen3.5-397B-A17B` model.
 
-## Quick Start
+## Product Direction
+
+- Primary deliverable: human-readable operational reports
+- Current focus: local-node summarization on `gpu003`, with graceful expansion
+  to optional cluster-wide sources
+- Non-goal right now: dashboards
+
+## Important Execution Model
+
+This project is developed locally but executed and validated on the cluster.
+
+- edit code locally or through remote IDE workflows
+- run the pipeline on `gpu003`
+- do not treat the local editing environment as the runtime environment
+
+## Quick Start On The Cluster
+
+Install dependencies:
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Run a one-shot metric collection
-python -m src.cli collect
-
-# View the latest collected metrics
-python -m src.cli show
-
-# Generate a daily summary
-python -m src.cli summarize
-
-# Start the web dashboard
-python -m src.cli dashboard
+python3 -m pip install -r requirements.txt
 ```
 
-## Architecture
+Check what is reachable:
 
-```
-Data Collection (every 5 min)
-  nvidia-smi / pynvml  -->  GPU metrics
-  Fabric Manager logs   -->  NVSwitch/NVLink events
-  psutil               -->  System metrics (CPU, mem, disk, net)
-        |
-        v
-  SQLite Storage (time-series metrics + parsed events)
-        |
-        v
-  Analysis (anomaly detection + event correlation)
-        |
-        v
-  LLM Summarization (Qwen3.5-397B via vLLM)
-        |
-        v
-  Output (Markdown reports, web dashboard)
+```bash
+python3 -m src.cli probe
 ```
 
-## Configuration
+Run one local-only collection cycle:
 
-Edit `config.yaml` to adjust thresholds, collection intervals, LLM parameters,
-and log source paths.
+```bash
+python3 -m src.cli collect --no-remote
+```
+
+Inspect recent data:
+
+```bash
+python3 -m src.cli status
+python3 -m src.cli show --hours 1
+python3 -m src.cli show --events --hours 1
+```
+
+Inspect the summary prompt without spending LLM output:
+
+```bash
+python3 -m src.cli summarize --hours 1 --dry-run
+```
+
+Generate a report:
+
+```bash
+python3 -m src.cli summarize --hours 1
+```
+
+## CLI Commands
+
+- `probe`
+  Check which local and optional data sources are reachable.
+
+- `collect`
+  Run one collection cycle and store results in SQLite.
+
+- `show`
+  Inspect recent GPU metrics or log events from SQLite.
+
+- `analyze`
+  Run anomaly detection and event correlation without calling the LLM.
+
+- `status`
+  Show table counts and database size.
+
+- `summarize`
+  Build a prompt, call the local vLLM endpoint, and write a Markdown report.
+
+## Architecture Summary
+
+```text
+GPU metrics + system metrics + logs + optional remote sources
+                        |
+                        v
+                 SQLite persistence
+                        |
+                        v
+       anomaly detection + incident correlation
+                        |
+                        v
+         prompt building with data-quality safeguards
+                        |
+                        v
+        local vLLM summary generation via OpenAI API
+                        |
+                        v
+                 Markdown report output
+```
 
 ## Project Structure
 
-```
+```text
 src/
-  collectors/       GPU metrics, system metrics, log parsers
-  storage/          SQLite database layer
-  analysis/         Anomaly detection, event correlation
-  summarizer/       LLM client, prompt building, report generation
-  dashboard/        Flask web UI
-  cli.py            Command-line interface
-scripts/            Cron job installation helpers
-tests/              Unit tests
+  cli.py                CLI entrypoint
+  collectors/           Local and optional telemetry collectors
+  storage/              SQLite schema and query helpers
+  analysis/             Anomaly detection and temporal correlation
+  summarizer/           Prompt builder, vLLM client, report writer
+scripts/                Cron and execution wrappers
+tests/                  Targeted automated tests
+docs/                   Architecture, testing, operations, and next steps
 ```
+
+## Documentation
+
+- [AGENTS.md](AGENTS.md)
+  Lightweight agent entrypoint and project overview.
+
+- [docs/architecture.md](docs/architecture.md)
+  Deep architecture, runtime flow, storage model, and implementation details.
+
+- [docs/testing-on-cluster.md](docs/testing-on-cluster.md)
+  Exact validation sequence for `gpu003`.
+
+- [docs/how-it-works-in-practice.md](docs/how-it-works-in-practice.md)
+  Practical operating model and debugging workflow.
+
+- [docs/next-steps.md](docs/next-steps.md)
+  Prioritized follow-up work and access dependencies.

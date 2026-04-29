@@ -11,7 +11,7 @@ SUMMARIZE="$SCRIPT_DIR/run_summarize.sh"
 chmod +x "$COLLECT" "$SUMMARIZE"
 
 CRON_COLLECT="*/5 * * * * $COLLECT"
-CRON_SUMMARIZE="0 6 * * * $SUMMARIZE"
+CRON_SUMMARIZE="0 */12 * * * $SUMMARIZE"
 
 # Append to crontab without duplicating existing entries
 (crontab -l 2>/dev/null || true) | grep -v "run_collect.sh" | grep -v "run_summarize.sh" > /tmp/gpu_cron_tmp
@@ -22,6 +22,6 @@ rm -f /tmp/gpu_cron_tmp
 
 echo "Cron jobs installed:"
 echo "  Collection:   every 5 minutes"
-echo "  Summarization: daily at 06:00 UTC"
+echo "  Summarization: every 12 hours (00:00 and 12:00 UTC)"
 echo ""
 crontab -l | grep -E "run_collect|run_summarize"

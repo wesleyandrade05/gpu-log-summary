@@ -9,4 +9,5 @@ mkdir -p "$LOG_DIR"
 
 cd "$PROJECT_DIR"
 
-python3 -m src.cli collect >> "$LOG_DIR/collect.log" 2>&1
+echo "--- $(date -u +%Y-%m-%dT%H:%M:%SZ) ---" >> "$LOG_DIR/collect.log"
+python3 -m src.cli collect --no-remote >> "$LOG_DIR/collect.log" 2>&1

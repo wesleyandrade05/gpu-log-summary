@@ -9,4 +9,5 @@ mkdir -p "$LOG_DIR"
 
 cd "$PROJECT_DIR"
 
+echo "--- $(date -u +%Y-%m-%dT%H:%M:%SZ) ---" >> "$LOG_DIR/summarize.log"
 python3 -m src.cli summarize --hours 24 >> "$LOG_DIR/summarize.log" 2>&1

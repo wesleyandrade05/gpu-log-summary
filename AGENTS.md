@@ -1,452 +1,114 @@
 # GPU Log Summarizer Agent Guide
 
-## Project Goal
+`AGENTS.md` is the lightweight entrypoint for this repository. It gives agents
+the project frame, the operating constraints, and the fastest path into the
+deeper documentation.
 
-This project builds an automated log and telemetry summarization pipeline for a GPU cluster.
+## Project Overview
 
-Current product goal:
-- Collect real telemetry from a GPU node and related cluster services.
-- Store the data locally in SQLite.
-- Detect anomalies and correlate related events.
-- Feed the structured context into a local LLM running on the cluster.
-- Generate a human-readable Markdown report with summary, risks, and recommendations.
+This project is a report-first AIOps summarizer for GPU infrastructure.
 
-Important project direction:
-- We are **not** building a dashboard right now.
-- The main deliverable is a **report-first AIOps summarizer**.
-- The cluster currently has a local vLLM endpoint serving `Qwen/Qwen3.5-397B-A17B`.
+Today the pipeline is built around:
+- collecting local GPU telemetry from `gpu003`
+- collecting local system telemetry
+- parsing Fabric Manager and InfiniBand logs
+- storing structured data in SQLite
+- detecting anomalies and correlating incidents
+- sending structured context to a local vLLM endpoint
+- generating Markdown reports with summary, risks, and recommendations
+
+The current target model on the cluster is:
+- endpoint: `http://localhost:30000/v1`
+- model: `Qwen/Qwen3.5-397B-A17B`
+
+## Product Direction
+
+Important guardrails:
+- We are not building a dashboard right now.
+- The primary deliverable is a conservative, high-signal report.
+- Optional collectors must fail gracefully when the cluster access is missing.
+- The LLM must not make claims stronger than the data supports.
+
+## Non-Negotiable Working Rules
+
+- Do not run project code, install dependencies, create virtual environments, or
+  execute tests in the local editing environment.
+- All runtime validation happens on the cluster, primarily on `gpu003`.
+- When validation is needed, give the user exact commands to run on the
+  cluster and explain the expected result.
+- Prefer improving report quality, operational clarity, and graceful handling
+  of partial data over adding UI.
 
 ## Current Status
 
 Working today:
-- Local GPU metric collection from `gpu003`
-- Local system metric collection
-- Fabric Manager and InfiniBand log parsing
-- SQLite storage
-- Threshold and statistical anomaly detection
-- Temporal incident correlation
-- Prompt building for LLM summaries
+- local GPU metrics
+- local system metrics
+- Fabric Manager log parsing
+- InfiniBand log parsing
+- SQLite persistence
+- anomaly detection
+- temporal incident correlation
+- prompt building
 - Markdown report generation
-- CLI commands for probe, collect, show, analyze, summarize
-- Cron helper scripts
+- CLI commands for `probe`, `collect`, `show`, `analyze`, `status`, `summarize`
+- cron wrapper scripts
 
-Partially implemented, but only active when cluster access is available:
-- Prometheus collector (direct API)
-- Prometheus S3 snapshot collector (awaiting S3 bucket access)
+Implemented but dependent on cluster access:
+- direct Prometheus collector
+- S3-backed Prometheus snapshot collector
 - AlertManager collector
 - Redfish collector
-- Multi-node SSH collector
+- multi-node SSH collector
 
-## Development Environment
-
-This project is developed and tested on the GPU cluster, **not locally**.
-
-- Code is edited on a local machine (or via an IDE with remote extensions).
-- All testing and runtime execution happens on the cluster node (`gpu003`) via SSH.
-- The user accesses the cluster through an SSH session in the browser.
-- **Agents must never attempt to run project code, install dependencies, create virtual environments, or execute tests in the local editing environment.** All commands must be run by the user on the cluster.
-- When tests or validation are needed, provide the exact commands and instruct the user to run them on the cluster.
-
-## Important Cluster Facts
-
-Known environment from testing:
-- Main tested node: `gpu003`
+Known environment:
+- primary node: `gpu003`
 - GPUs: `8x NVIDIA H200`
-- Local LLM endpoint: `http://localhost:30000/v1`
-- Model: `Qwen/Qwen3.5-397B-A17B`
-- Readable logs:
+- readable logs:
   - `/var/log/fabricmanager.log`
   - `/var/log/ibacm.log`
-  - `/var/log/nvidia-dcgm/` exists but is usually empty
+  - `/var/log/nvidia-dcgm/` is usually present but often empty
 
-Known access gaps at the time of writing:
-- Direct Prometheus endpoint not reachable from `gpu003` — **S3 snapshot path confirmed instead** (awaiting bucket access)
-- AlertManager URL not yet configured / not reachable from `gpu003`
-- Redfish URL not yet configured / not reachable from `gpu003`
-- SSH access to other GPU nodes not yet working from `gpu003`
-- `kubectl` access still unavailable
-- S3 bucket for Prometheus snapshots not yet provisioned
+## Read Next
 
-The code is already written so these sources are optional:
-- If a URL is empty, a bucket is unconfigured, or a service is unreachable, the collector should skip cleanly.
+- [Architecture](docs/architecture.md)
+  Deep end-to-end system design, runtime flow, storage model, and current
+  implementation details.
 
-## File Structure
+- [Cluster Testing Guide](docs/testing-on-cluster.md)
+  Exact validation flow for running and checking the pipeline on `gpu003`.
 
-### Top-level files
+- [Operational Workflow](docs/how-it-works-in-practice.md)
+  Practical explanation of how the pipeline behaves day to day on the cluster.
 
-- `config.yaml`
-  - Main runtime configuration.
-  - Holds local collection settings, LLM config, anomaly thresholds, and optional external source config.
+- [Next Steps](docs/next-steps.md)
+  Prioritized follow-up work, access dependencies, and product hardening areas.
 
-- `requirements.txt`
-  - Python runtime dependencies for the project.
+## Quick File Map
 
-- `README.md`
-  - High-level project readme.
-  - Note: it may lag behind the current implementation and should not be treated as the most precise agent guide.
+- `src/cli.py`
+  Main operator entrypoint and the best top-level flow reference.
 
-- `CURSOR.md`
-  - This file.
-  - Intended as the best quick-start reference for future agents.
+- `src/collectors/`
+  Local collectors plus optional external integrations.
 
-## Source Layout
+- `src/storage/database.py`
+  SQLite schema, inserts, bookmarks, and aggregate helpers.
 
-### `src/cli.py`
+- `src/analysis/`
+  Threshold detection, z-score detection, and temporal correlation.
 
-Main operator entrypoint.
+- `src/summarizer/`
+  vLLM client, prompt builder, and report writer.
 
-Commands:
-- `probe`
-  - Checks which data sources are currently reachable.
-- `collect`
-  - Runs one collection cycle.
-- `show`
-  - Shows recent GPU or log data from SQLite.
-- `analyze`
-  - Runs anomaly detection and event correlation.
-- `status`
-  - Shows database table counts and DB size.
-- `summarize`
-  - Builds the prompt, calls the LLM, and writes a report.
+- `scripts/`
+  Cron-oriented wrappers for collection and summarization.
 
-This file is the best place to understand the runtime flow.
+## Agent Notes
 
-### `src/collectors/`
-
-Collectors ingest data from different sources.
-
-- `gpu_metrics.py`
-  - Local GPU metrics via `pynvml` first, `nvidia-smi` fallback.
-  - Collects:
-    - GPU utilization
-    - memory usage
-    - temperature
-    - power draw / power limit
-    - ECC counters
-    - clocks
-    - throttle reasons
-    - running GPU processes
-    - NVLink counters when available
-
-- `system_metrics.py`
-  - Local system telemetry via `psutil`.
-  - Collects:
-    - CPU utilization
-    - memory usage
-    - swap
-    - disk I/O
-    - network I/O
-    - load averages
-
-- `log_parser.py`
-  - Parses local logs incrementally using file-offset bookmarks.
-  - Supported today:
-    - Fabric Manager
-    - InfiniBand ACM
-    - DCGM directory parsing
-  - Produces normalized `LogEvent` objects.
-
-- `prometheus.py`
-  - Optional Prometheus collector (direct API).
-  - Intended to query cluster-wide metrics through PromQL.
-  - Skips automatically if URL is unset or unreachable.
-  - Note: direct Prometheus access is unlikely; prefer the S3 path below.
-
-- `s3_prometheus.py`
-  - S3-based Prometheus snapshot collector.
-  - Downloads JSON metric snapshots deposited by the cluster admin into an S3 bucket.
-  - Outputs `PrometheusResult` objects identical to `prometheus.py`, so storage and downstream pipeline are shared.
-  - Uses `boto3` for S3 access.
-  - Supports bookmark-based deduplication to avoid re-processing files.
-  - Skips automatically if bucket is unconfigured or unreachable.
-
-- `alertmanager.py`
-  - Optional AlertManager collector.
-  - Pulls firing alerts and converts them into log-like events for the pipeline.
-
-- `redfish.py`
-  - Optional Redfish BMC collector.
-  - Intended to collect:
-    - chassis temperatures
-    - fans
-    - power supplies
-    - SEL / hardware event log
-
-- `multinode.py`
-  - Optional SSH-based collector for remote GPU nodes.
-  - Runs `nvidia-smi` on remote nodes and stores remote GPU snapshots.
-
-### `src/storage/database.py`
-
-SQLite storage layer.
-
-Core tables:
-- `gpu_snapshots`
-- `system_snapshots`
-- `log_events`
-- `anomalies`
-- `summaries`
-- `bookmarks`
-
-Optional-source tables:
-- `prometheus_snapshots`
-- `redfish_snapshots`
-- `multinode_snapshots`
-
-This file also contains aggregate query helpers used by `summarize`.
-
-### `src/analysis/`
-
-- `anomaly.py`
-  - Threshold-based and z-score-based anomaly detection.
-  - Handles GPU and system anomalies.
-
-- `correlator.py`
-  - Groups anomalies and log events into time-windowed incident clusters.
-
-### `src/summarizer/`
-
-- `llm_client.py`
-  - OpenAI-compatible client pointed at the local vLLM endpoint.
-
-- `prompt_builder.py`
-  - Builds the structured prompt used for daily summaries.
-  - Includes explicit data-quality guidance so the LLM does not overstate sparse telemetry.
-
-- `report_generator.py`
-  - Writes the final Markdown report to `reports/`.
-
-### `scripts/`
-
-- `run_collect.sh`
-  - Wrapper for scheduled collection.
-
-- `run_summarize.sh`
-  - Wrapper for scheduled summarization.
-
-- `install_cron.sh`
-  - Installs cron entries for automated operation.
-
-## Data We Collect and Why
-
-### 1. Local GPU telemetry
-
-Why:
-- Core signal for GPU health and workload behavior.
-- Needed to detect idle GPUs, memory pressure, thermal problems, ECC errors, and power anomalies.
-
-Main metrics:
-- utilization
-- memory used / total
-- temperature
-- power draw
-- ECC counts
-- throttle reasons
-- process holders
-- NVLink counters
-
-### 2. Local system telemetry
-
-Why:
-- GPU issues are often caused or explained by host-side bottlenecks.
-- Useful for distinguishing GPU-side problems from CPU, RAM, disk, or network issues.
-
-Main metrics:
-- CPU %
-- host memory %
-- swap
-- disk I/O
-- network I/O
-- load averages
-
-### 3. Fabric Manager logs
-
-Why:
-- Important for NVSwitch / NVLink fabric health.
-- Helps explain interconnect problems and GPU communication issues.
-
-### 4. InfiniBand ACM logs
-
-Why:
-- Gives signal on cluster networking / RDMA-related issues.
-- Useful once multi-node workloads are considered.
-
-### 5. Prometheus metrics via S3 (planned / in progress)
-
-Why:
-- Best source for cluster-wide and historical metrics.
-- Lets us summarize beyond a single node.
-- Important for future KPIs like utilization, capacity, and cluster health trends.
-
-Access path:
-- Direct Prometheus endpoint is not reachable from `gpu003`.
-- The cluster admin will provide an S3 bucket containing Prometheus metric snapshots (JSON format).
-- The `s3_prometheus.py` collector downloads and parses these snapshots.
-- Awaiting: bucket name, prefix, and IAM credentials from the admin.
-
-### 6. AlertManager alerts (planned / optional)
-
-Why:
-- Existing operational knowledge is already encoded in cluster alerts.
-- Helps the LLM correlate “what the system already thinks is wrong” with raw metrics.
-
-### 7. Redfish hardware telemetry (planned / optional)
-
-Why:
-- Needed for chassis-level visibility outside the OS.
-- Useful for power, thermal, and hardware event correlation.
-
-### 8. Multi-node SSH snapshots (planned / optional)
-
-Why:
-- Lets the product grow from node-level to cluster-level reporting.
-- Important for summarizing fleet-wide GPU usage and identifying skew across nodes.
-
-## Manual Testing Flow
-
-Use this exact order when validating on the cluster.
-
-### 1. Install dependencies
-
-```bash
-python3 -m pip install -r requirements.txt
-```
-
-If a module is missing because of Python version mismatch, install with:
-
-```bash
-python3 -m pip install <package>
-```
-
-### 2. Check runtime availability
-
-```bash
-python3 -m src.cli probe
-```
-
-Expected:
-- GPU should be OK
-- system should be OK
-- local logs should be OK
-- LLM should be OK
-- optional sources may show SKIP until access is configured
-
-### 3. Run one collection cycle
-
-```bash
-python3 -m src.cli collect --no-remote
-```
-
-Use `--no-remote` until Prometheus / AlertManager / Redfish / SSH are configured.
-
-### 4. Inspect the database
-
-```bash
-python3 -m src.cli status
-```
-
-### 5. Inspect local GPU data
-
-```bash
-python3 -m src.cli show --hours 1
-```
-
-### 6. Run anomaly detection
-
-```bash
-python3 -m src.cli analyze --hours 1
-```
-
-### 7. Inspect the summary prompt without spending LLM output
-
-```bash
-python3 -m src.cli summarize --hours 1 --dry-run
-```
-
-### 8. Generate a real report
-
-```bash
-python3 -m src.cli summarize --hours 1
-```
-
-Report output:
-- `reports/report_YYYY-MM-DD_HHMMSS_gpu003.md`
-
-## Known Testing Lessons
-
-- A single collection run produces only one sample per GPU and one system snapshot.
-- Sparse sampling can cause the LLM to over-interpret the data.
-- The prompt was updated to explicitly warn the model when sample counts are low.
-- High VRAM with 0% GPU utilization does **not** automatically mean a hung workload.
-  - It may also mean:
-    - a loaded inference server waiting for requests
-    - a paused workload
-    - a checkpoint boundary
-
-## What We Still Need From the Cluster
-
-These are the remaining access items needed to make the product fuller and more cluster-aware.
-
-### Needed access
-
-- **S3 bucket for Prometheus snapshots** (highest priority)
-  - Bucket name, prefix, and IAM credentials.
-  - Direct Prometheus API access confirmed as unavailable; S3 is the agreed path.
-  - Code is ready in `s3_prometheus.py` — just needs config values.
-
-- **AlertManager endpoint URL**
-  - Needed to pull currently firing alerts.
-
-- **Redfish endpoint URL + credentials**
-  - Needed for BMC-level hardware telemetry.
-
-- **SSH access from gpu003 to other GPU nodes**
-  - Needed for the multi-node collector.
-
-- **Optional: kubectl / kubeconfig**
-  - Not strictly required for the current report-first product, but useful if we later want Kubernetes object context.
-
-### Once S3 access is available
-
-Update `config.yaml`:
-- `prometheus_s3.bucket`
-- `prometheus_s3.prefix`
-- Ensure AWS credentials are available (env vars, IAM role, or `~/.aws/credentials`)
-
-### Once other access is available
-
-Update `config.yaml`:
-- `alertmanager.url`
-- `redfish.url`
-- `redfish.username`
-- `redfish.password`
-
-Then run:
-
-```bash
-python3 -m src.cli probe
-python3 -m src.cli collect
-python3 -m src.cli summarize --hours 1 --dry-run
-```
-
-## End Goal
-
-The end product should be:
-- a report-first AIOps summarizer for GPU infrastructure
-- able to run directly on the cluster
-- able to ingest local node metrics, node logs, and eventually cluster-wide telemetry
-- able to produce concise summaries, recommendations, and risk assessments
-- conservative when data quality is low
-- stronger and more diagnostic when Prometheus, AlertManager, Redfish, and multi-node access become available
-
-## Agent Guidance
-
-If you are an agent working on this repo:
-- Prefer improving the **report quality** over adding UI.
-- Do not reintroduce dashboards unless explicitly requested.
-- Keep commits small and testable.
-- Treat optional collectors as probe-based integrations that must fail gracefully.
-- Be careful not to let the LLM make claims stronger than the data supports.
-- If the user asks about cluster specifics, ask them to run commands on the cluster and paste the results back.
-- **Do not run code, tests, pip install, or create virtual environments locally.** All execution happens on the remote cluster. Provide commands for the user to run.
-- When tests need to be verified, give the user the exact commands and expected output.
+- If the user asks for cluster-specific diagnosis, ask them to run commands on
+  the cluster and share the results.
+- If a URL, bucket, credential, or remote dependency is missing, the expected
+  behavior is to skip cleanly rather than fail the whole pipeline.
+- Treat sparse telemetry as a first-class product constraint. The report should
+  say when confidence is limited.
