@@ -42,7 +42,7 @@ echo ""
 echo "--- $(date -u +%Y-%m-%dT%H:%M:%SZ) starting ---" >> "$LOG_FILE"
 
 tmux new-session -d -s vllm \
-  "bash -c '$VENV_VLLM serve $MODEL_PATH \
+  "bash -c 'export FLASHINFER_DISABLE_VERSION_CHECK=1; $VENV_VLLM serve $MODEL_PATH \
     --served-model-name $MODEL_NAME \
     --port $PORT \
     --tensor-parallel-size $TP \
