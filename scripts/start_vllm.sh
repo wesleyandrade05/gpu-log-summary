@@ -7,6 +7,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 VENV_VLLM="$PROJECT_DIR/.venv/bin/vllm"
+LOG_DIR="$PROJECT_DIR/logs"
+LOG_FILE="$LOG_DIR/vllm.log"
+mkdir -p "$LOG_DIR"
 
 MODEL_PATH="/mnt/superalarm/models/Qwen3.5-397B-A17B-FP8"
 MODEL_NAME="Qwen/Qwen3.5-397B-A17B"
@@ -36,14 +39,19 @@ echo "  Max seq len: $MAX_LEN"
 echo "  GPU mem util: $GPU_MEM_UTIL"
 echo ""
 
+echo "--- $(date -u +%Y-%m-%dT%H:%M:%SZ) starting ---" >> "$LOG_FILE"
+
 tmux new-session -d -s vllm \
-  "$VENV_VLLM serve $MODEL_PATH \
+  "bash -c '$VENV_VLLM serve $MODEL_PATH \
     --served-model-name $MODEL_NAME \
     --port $PORT \
     --tensor-parallel-size $TP \
     --trust-remote-code \
     --max-model-len $MAX_LEN \
-    --gpu-memory-utilization $GPU_MEM_UTIL"
+    --gpu-memory-utilization $GPU_MEM_UTIL \
+    >> $LOG_FILE 2>&1'"
 
-echo "Server starting. Attach with: tmux attach -t vllm"
-echo "Poll readiness:  watch -n 15 'curl -s --max-time 3 http://localhost:${PORT}/health && echo READY || echo loading...'"
+echo "Server starting."
+echo "  Follow logs:    tail -f $LOG_FILE"
+echo "  Attach session: tmux attach -t vllm"
+echo "  Poll readiness: watch -n 15 'curl -s --max-time 3 http://localhost:${PORT}/health && echo READY || echo loading...'"
