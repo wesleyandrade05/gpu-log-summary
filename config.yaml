@@ -72,8 +72,5 @@ redfish:
 multinode:
   enabled: true
   nodes:
-    - gpu002
-    - gpu004
-    - gpu005
-    - gpu008
+    - gpu006   # direct SSH as yale (key-based auth)
   ssh_timeout: 5

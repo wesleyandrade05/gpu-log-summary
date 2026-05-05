@@ -22,42 +22,59 @@ This project is developed locally but executed and validated on the cluster.
 
 ## Quick Start On The Cluster
 
-Install dependencies:
+Create the virtual environment and install dependencies:
 
 ```bash
-python3 -m pip install -r requirements.txt
+cd ~/class_projects/wesley-gpu-monitor/gpu-log-summary
+python3.12 -m venv .venv
+.venv/bin/pip install --upgrade pip
+.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install vllm==0.18.0
+```
+
+Start the vLLM inference server (loads in ~5-10 minutes):
+
+```bash
+bash scripts/start_vllm.sh
+tail -f logs/vllm.log  # wait for "Application startup complete"
+```
+
+Install cron jobs (collection every 5 min, summary every 12h, vLLM watchdog every 10 min):
+
+```bash
+bash scripts/install_cron.sh
 ```
 
 Check what is reachable:
 
 ```bash
-python3 -m src.cli probe
+.venv/bin/python -m src.cli probe
 ```
 
 Run one local-only collection cycle:
 
 ```bash
-python3 -m src.cli collect --no-remote
+.venv/bin/python -m src.cli collect --no-remote
 ```
 
 Inspect recent data:
 
 ```bash
-python3 -m src.cli status
-python3 -m src.cli show --hours 1
-python3 -m src.cli show --events --hours 1
+.venv/bin/python -m src.cli status
+.venv/bin/python -m src.cli show --hours 1
+.venv/bin/python -m src.cli show --events --hours 1
 ```
 
 Inspect the summary prompt without spending LLM output:
 
 ```bash
-python3 -m src.cli summarize --hours 1 --dry-run
+.venv/bin/python -m src.cli summarize --hours 1 --dry-run
 ```
 
 Generate a report:
 
 ```bash
-python3 -m src.cli summarize --hours 1
+.venv/bin/python -m src.cli summarize --hours 1
 ```
 
 ## CLI Commands
@@ -128,6 +145,9 @@ docs/                   Architecture, testing, operations, and next steps
 
 - [docs/how-it-works-in-practice.md](docs/how-it-works-in-practice.md)
   Practical operating model and debugging workflow.
+
+- [docs/operations.md](docs/operations.md)
+  Known failure modes, resolutions, vLLM version notes, and health checks.
 
 - [docs/next-steps.md](docs/next-steps.md)
   Prioritized follow-up work and access dependencies.
