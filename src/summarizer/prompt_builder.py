@@ -205,6 +205,10 @@ def _build_system_stats_section(snapshots: list[dict]) -> str:
     )
 
 
+MAX_CRITICAL = 30
+MAX_WARNINGS = 20
+
+
 def _build_anomalies_section(anomalies: list[dict]) -> str:
     if not anomalies:
         return "## Detected Anomalies\nNo anomalies detected — all metrics within normal ranges."
@@ -216,17 +220,19 @@ def _build_anomalies_section(anomalies: list[dict]) -> str:
 
     if critical:
         lines.append("### Critical")
-        for a in critical:
+        for a in critical[:MAX_CRITICAL]:
             gpu_tag = f" [GPU {a['gpu_index']}]" if a.get("gpu_index") is not None else ""
             lines.append(f"- **{a.get('metric_name', '?')}**{gpu_tag}: {a['description']}")
+        if len(critical) > MAX_CRITICAL:
+            lines.append(f"- ... and {len(critical) - MAX_CRITICAL} more critical anomalies")
 
     if warnings:
         lines.append("\n### Warnings")
-        for a in warnings[:20]:
+        for a in warnings[:MAX_WARNINGS]:
             gpu_tag = f" [GPU {a['gpu_index']}]" if a.get("gpu_index") is not None else ""
             lines.append(f"- **{a.get('metric_name', '?')}**{gpu_tag}: {a['description']}")
-        if len(warnings) > 20:
-            lines.append(f"- ... and {len(warnings) - 20} more warnings")
+        if len(warnings) > MAX_WARNINGS:
+            lines.append(f"- ... and {len(warnings) - MAX_WARNINGS} more warnings")
 
     return "\n".join(lines)
 
@@ -349,11 +355,19 @@ def _build_multinode_section(mn_stats: list[dict]) -> str:
     return "\n".join(lines)
 
 
+MAX_CLUSTERS = 20
+
+
 def _build_incidents_section(clusters: list) -> str:
-    """Format pre-correlated incident clusters."""
+    """Format pre-correlated incident clusters. Clusters are pre-sorted by severity."""
     from src.analysis.correlator import format_clusters_for_llm
-    text = format_clusters_for_llm(clusters)
-    return f"## Correlated Incidents\n\n{text}"
+    total = len(clusters)
+    capped = clusters[:MAX_CLUSTERS]
+    text = format_clusters_for_llm(capped)
+    suffix = ""
+    if total > MAX_CLUSTERS:
+        suffix = f"\n\n_(Showing {MAX_CLUSTERS} of {total} incident clusters, highest severity first.)_"
+    return f"## Correlated Incidents\n\n{text}{suffix}"
 
 
 def _build_task_instruction() -> str:
