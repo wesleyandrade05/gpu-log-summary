@@ -38,42 +38,40 @@ python3.12 -m venv .venv
 .venv/bin/python -c "import vllm, pynvml, psutil, requests; print('OK')"
 .venv/bin/python -c "import torch; print(torch.cuda.is_available(), torch.cuda.device_count())"
 
-# Install cron jobs
-bash scripts/install_cron.sh
+# Start vLLM
+bash scripts/start_vllm.sh
+tail -f logs/vllm.log  # wait for "Application startup complete"
 
-# Install vLLM as a persistent systemd service
-bash scripts/install_vllm_service.sh
+# Install cron jobs (collection, summarization, vLLM watchdog)
+bash scripts/install_cron.sh
 ```
 
 ---
 
-## Managing the vLLM Service
+## Managing the vLLM Server
 
-The vLLM server runs as a systemd user service that auto-restarts on failure
-and survives node reboots. Use `scripts/start_vllm.sh` only for ad-hoc manual
-starts; the service installer is preferred for sustained operation.
+The vLLM server runs in a tmux session named `vllm`. A cron watchdog checks
+every 10 minutes and restarts it automatically if it goes down.
 
 ```bash
-# Check status
-systemctl --user status gpu-log-vllm
+# Start manually
+bash scripts/start_vllm.sh
 
-# Follow live logs
-journalctl --user -u gpu-log-vllm -f
-# or
+# Follow startup logs
 tail -f logs/vllm.log
 
-# Restart after a config change
-systemctl --user restart gpu-log-vllm
+# Check if it's up
+curl -s http://localhost:30000/health && echo "UP" || echo "DOWN"
 
-# Stop temporarily
-systemctl --user stop gpu-log-vllm
+# Attach to the tmux session
+tmux attach -t vllm
 
-# Remove the service entirely
-bash scripts/install_vllm_service.sh --remove
+# Watchdog restart history
+cat logs/watchdog.log
 ```
 
-Model loading takes 5–10 minutes after the service starts. The server is ready
-when `logs/vllm.log` shows `Application startup complete`.
+Model loading takes 5–10 minutes. The server is ready when `logs/vllm.log`
+shows `Application startup complete`.
 
 ---
 
@@ -88,8 +86,9 @@ termination). Before the systemd service was in place, this happened because
 the server ran in a tmux session that could be killed externally.
 
 **Resolution:**
-- Install the systemd service: `bash scripts/install_vllm_service.sh`
-- The service restarts automatically with `Restart=always` and a 30s delay.
+- Install the cron watchdog: `bash scripts/install_cron.sh`
+- The watchdog checks every 10 minutes and restarts vLLM via `start_vllm.sh` if unreachable.
+- Restart history is logged to `logs/watchdog.log`.
 - Check what killed it: `grep -i "oom\|killed" /var/log/syslog | tail -20`
 
 ---
