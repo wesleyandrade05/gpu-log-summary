@@ -5,7 +5,6 @@ Collects CPU, memory, disk, and network stats to complement GPU telemetry.
 """
 
 import logging
-import time
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 

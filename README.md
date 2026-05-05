@@ -3,7 +3,7 @@
 Automated report-first AIOps pipeline for GPU infrastructure. The project
 collects telemetry from a GPU cluster node, stores structured context in
 SQLite, detects anomalies, correlates related events, and generates Markdown
-reports through an on-cluster vLLM-served `Qwen/Qwen3.5-397B-A17B` model.
+reports through an on-cluster vLLM-served `Qwen/Qwen3-235B-A22B-FP8` model.
 
 ## Product Direction
 

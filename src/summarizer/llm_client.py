@@ -1,9 +1,10 @@
 """
-LLM client for the on-cluster vLLM instance serving Qwen3.5-397B.
+LLM client for the on-cluster vLLM instance.
 
 Uses the OpenAI-compatible API exposed by vLLM at localhost:30000.
 The openai Python library works out of the box — just point base_url
-at the vLLM endpoint instead of api.openai.com.
+at the vLLM endpoint instead of api.openai.com. The served model is
+configured in config.yaml; defaults below are conservative fallbacks.
 """
 
 import logging
@@ -19,7 +20,7 @@ class LLMClient:
     def __init__(
         self,
         base_url: str = "http://localhost:30000/v1",
-        model: str = "Qwen/Qwen3.5-397B-A17B",
+        model: str = "Qwen/Qwen3-235B-A22B-FP8",
         max_tokens: int = 4096,
         temperature: float = 0.3,
         api_key: str = "not-needed",
@@ -75,7 +76,8 @@ class LLMClient:
 
         choice = response.choices[0]
         content = choice.message.content or ""
-        # Qwen3.5 may return reasoning in a separate field; append if present
+        # Some Qwen variants return reasoning in a separate field; use it if
+        # the regular content is empty.
         reasoning = getattr(choice.message, "reasoning", None) or \
                     getattr(choice.message, "reasoning_content", None)
         if reasoning and not content:

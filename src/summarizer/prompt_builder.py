@@ -5,9 +5,7 @@ Builds structured prompts from collected metrics, anomalies, and log events
 that guide the LLM toward producing actionable, well-organized reports.
 """
 
-import json
 import logging
-from datetime import datetime
 from typing import Optional
 
 logger = logging.getLogger(__name__)

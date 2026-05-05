@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Installs cron jobs for automated collection (every 5 min) and
-# daily summarization (6:00 AM UTC).
+# Installs three cron jobs:
+#   - collection every 5 min
+#   - summarization every 12 hours (00:00 and 12:00 UTC)
+#   - vLLM watchdog every 10 min (restarts the server if unreachable)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

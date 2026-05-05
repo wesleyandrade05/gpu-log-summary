@@ -343,7 +343,7 @@ def summarize(hours, dry_run):
         llm_config = config.get("llm", {})
         client = LLMClient(
             base_url=llm_config.get("base_url", "http://localhost:30000/v1"),
-            model=llm_config.get("model", "Qwen/Qwen3.5-397B-A17B"),
+            model=llm_config.get("model", "Qwen/Qwen3-235B-A22B-FP8"),
             max_tokens=llm_config.get("max_tokens", 4096),
             temperature=llm_config.get("temperature", 0.3),
         )
@@ -393,7 +393,6 @@ def probe():
 
     # Local GPU
     try:
-        from src.collectors.gpu_metrics import _try_pynvml
         import subprocess
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=count", "--format=csv,noheader"],
@@ -468,7 +467,7 @@ def probe():
         llm_config = config.get("llm", {})
         client = LLMClient(
             base_url=llm_config.get("base_url", "http://localhost:30000/v1"),
-            model=llm_config.get("model", "Qwen/Qwen3.5-397B-A17B"),
+            model=llm_config.get("model", "Qwen/Qwen3-235B-A22B-FP8"),
         )
         llm_ok = client.health_check()
         click.echo(f"  LLM (vLLM) ................ {_status(llm_ok, client.model)}")

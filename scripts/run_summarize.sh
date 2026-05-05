@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Wrapper for cron: generates a daily LLM summary with logging.
+# Wrapper for cron: generates an LLM summary for the last 24h. Skips
+# cleanly (no error mail) when the local vLLM endpoint is unreachable.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

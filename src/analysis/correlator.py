@@ -13,7 +13,7 @@ form a single correlated incident.
 import logging
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Union
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 

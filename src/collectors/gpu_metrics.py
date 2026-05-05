@@ -5,10 +5,8 @@ Collects: utilization, memory, temperature, power, ECC errors, NVLink stats,
 clock speeds, throttle reasons, and running processes for all GPUs on the node.
 """
 
-import json
 import logging
 import subprocess
-import time
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from typing import Optional

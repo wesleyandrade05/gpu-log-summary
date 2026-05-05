@@ -1,208 +1,76 @@
 # Next Steps
 
-## Intent
+The follow-up work that would most improve the report-first summarizer,
+ordered roughly by impact.
 
-This document captures the highest-value follow-up work for the current
-report-first summarizer. The priorities below assume we want better report
-quality, broader telemetry coverage, and more reliable on-cluster operation
-without turning the project into a UI-heavy monitoring product.
+## Operational dependency to flag
 
-## Operational Constraint: Shared Storage and Model Hosting
+The original target model (`Qwen/Qwen3.5-397B-A17B`) lives on a
+FUSE-backed cluster mount that is intermittently unreachable. When that
+mount hangs, vLLM workers enter uninterruptible kernel sleep and survive
+`kill -9`. The project now serves `Qwen/Qwen3-235B-A22B-FP8` from the
+local HuggingFace cache, which removes the FUSE dependency without
+changing the pipeline. The shared mount remains a cluster-infrastructure
+risk worth flagging in any final write-up. See `docs/operations.md` for
+the diagnosis path and the (one-line) rollback if the mount becomes
+reliable.
 
-The original target model `Qwen/Qwen3.5-397B-A17B` lives on
-`/mnt/superalarm/models/`, a FUSE-backed mount that has been intermittently
-unreachable. When the mount hangs, vLLM workers enter uninterruptible
-kernel sleep (D state) and cannot be killed.
+## Priority 1 — unlock cluster-wide context
 
-In response, we switched the served model to `Qwen/Qwen3-235B-A22B-FP8`,
-which is cached locally under `~/.cache/huggingface/hub/` and has no FUSE
-dependency. See `docs/operations.md` ("Model Selection History" and issue
-#9) for the full reasoning, the diagnosis path, and how to switch back if
-the mount becomes reliable.
+The collectors are already implemented; they only need access.
 
-This is not a project blocker — the pipeline runs unchanged on the new
-model. It is, however, a cluster-infrastructure dependency that is worth
-flagging in any final write-up.
+- **S3 Prometheus** is the highest-value next source. It turns a
+  single-node summarizer into one with real cluster context. Needs
+  bucket name, prefix convention, and credentials/IAM path.
+- **AlertManager** injects existing operational knowledge into the same
+  narrative as raw telemetry. Needs a reachable URL.
+- **Redfish (BMC)** adds chassis-level thermal, fan, power, and hardware
+  event context — useful for separating OS-level symptoms from
+  hardware-level causes. Needs a URL and credentials.
+- **Multi-node SSH** is the simplest path from node-level to fleet-aware
+  reporting. Needs SSH from `gpu003` to peer GPU nodes.
 
----
+Validation pattern after enabling any of these: `probe`, `collect`,
+`status`, then `summarize --dry-run` and confirm new context appears.
 
-## Priority 1: Unlock Cluster-Wide Context
+## Priority 2 — improve report quality
 
-### 1. Complete S3 Prometheus integration
+- Strengthen sparse-data handling further: explicit confidence labels,
+  distinct prompt language for "single snapshot" vs "short window" vs
+  "dense window", and surface sample counts in the report body.
+- Add more derived context before the LLM call: sustained idle-memory
+  patterns, ECC and throttle rollups, log-event frequency by category,
+  and a simple "top concerns" ranking.
+- Keep the prompt structured as more sources come online — source-specific
+  summaries instead of a raw-evidence dump.
 
-This is the most important missing operational dependency.
+## Priority 3 — analysis and data hygiene
 
-Needed from the cluster side:
-- S3 bucket name
-- prefix convention
-- credentials or IAM access path
+- Reduce anomaly duplication semantics. Today `summarize` recomputes
+  anomalies and inserts them again, which is fine for now but makes the
+  `anomalies` table feel like a log of analysis runs. Add run identifiers
+  or deduplication keys.
+- Expand automated coverage beyond the S3 collector: log parser bookmark
+  behavior, anomaly-detection edge cases, prompt builder sparse-data
+  safeguards, and a small fixture corpus to regression-test report inputs
+  without live cluster conditions.
 
-Why it matters:
-- it is the cleanest path to cluster-wide metrics
-- the collector is already implemented
-- downstream storage and summarization are already wired for it
-- it materially improves report quality without requiring a major redesign
+## Priority 4 — operational polish
 
-Recommended follow-up after access arrives:
-- validate `probe`
-- validate `collect`
-- inspect `prometheus_snapshots`
-- inspect `summarize --dry-run`
-- add at least one example configuration block to the docs
+- Retention/maintenance utilities: prune old reports, vacuum SQLite,
+  compact old anomalies and summaries.
+- Diagnostics CLI: show current config summary, last successful
+  collection, bookmark state, last successful summary metadata.
 
-### 2. Wire AlertManager when available
+## Explicitly not now
 
-Why it matters:
-- it injects existing operational knowledge into the same narrative as raw
-  telemetry
-- it can improve prioritization in the generated report
+Dashboards, complex front-end work, large platform rewrites. The
+report-first path is still the right focus.
 
-Needed:
-- reachable URL
+## Suggested execution order
 
-### 3. Wire Redfish when available
-
-Why it matters:
-- it adds chassis-level thermal, fan, power, and hardware event context
-- it helps separate OS-level symptoms from hardware-level causes
-
-Needed:
-- URL
-- credentials
-
-### 4. Enable multi-node SSH collection
-
-Why it matters:
-- it is the simplest path from node-level reporting to fleet-aware reporting
-- it enables comparative statements across nodes before a full observability
-  backend is in place
-
-Needed:
-- working SSH from `gpu003` to peer GPU nodes
-
-## Priority 2: Improve Report Quality
-
-### 1. Strengthen sparse-data handling even further
-
-Current prompt safeguards are good, but this is a core product risk area.
-
-Good follow-ups:
-- add explicit confidence labels in the report prompt
-- differentiate between "single snapshot", "short window", and "dense window"
-- surface sample counts more prominently in the final report body
-
-### 2. Add more derived context before the LLM call
-
-Right now the model gets aggregates plus incidents, which is a strong start.
-Additional precomputed context could improve precision:
-- sustained idle-memory patterns by GPU
-- repeated ECC trend summaries
-- repeated throttle-event rollups
-- log-event frequency summaries by category
-- simple "top concerns" ranking before prompting
-
-### 3. Improve prompt sections for optional sources
-
-As more integrations come online, the prompt should stay structured rather than
-becoming a dump of raw evidence. A good next step is source-specific summaries
-that compress:
-- cluster health
-- hardware health
-- cross-node skew
-- active alert themes
-
-## Priority 3: Improve Data and Analysis Reliability
-
-### 1. Reduce anomaly duplication semantics
-
-Today `summarize` recalculates anomalies and inserts them again. That is
-acceptable for now, but over time it may make the `anomalies` table feel more
-like a log of analysis runs than a clean derived dataset.
-
-Potential improvements:
-- add run identifiers
-- add deduplication keys
-- separate detected anomalies from persisted analysis executions
-
-### 2. Expand automated testing beyond S3 Prometheus
-
-Current automated coverage is strongest for the S3 collector. Good next targets:
-- log parser bookmark behavior
-- anomaly detection edge cases
-- prompt builder sparse-data safeguards
-- report generation output shape
-- CLI smoke coverage with fixture data
-
-### 3. Add fixture-driven integration tests
-
-A practical medium-term improvement is a small corpus of:
-- GPU snapshot fixtures
-- system snapshot fixtures
-- Fabric Manager log fixtures
-- InfiniBand log fixtures
-- expected anomaly and incident outputs
-
-That would let us regression-test report inputs without requiring live cluster
-conditions.
-
-## Priority 4: Make On-Cluster Operations Smoother
-
-### 1. Add a deployment and operations doc for the cluster user
-
-The testing guide is strong for validation. A separate operator-focused guide
-could cover:
-- first-time setup
-- config editing workflow
-- cron installation
-- where to inspect failures
-- how to rotate or manage report and log retention
-
-### 2. Add explicit environment diagnostics
-
-Useful CLI follow-ups:
-- show current config summary
-- show last successful collection timestamp
-- show bookmark state
-- show last successful summary metadata
-
-### 3. Add retention and maintenance utilities
-
-Likely future needs:
-- prune old reports
-- vacuum or rotate SQLite data
-- compact old anomalies or summaries
-
-## Priority 5: Prepare for Broader Cluster Intelligence
-
-These are valuable, but they come after the core telemetry access gaps.
-
-Potential future directions:
-- optional Kubernetes context once `kubectl` access exists
-- comparative reporting across nodes
-- longer-horizon trend summaries
-- recurring incident detection
-- recommendation templates based on collector-specific evidence
-
-## What Not To Prioritize Right Now
-
-These are intentionally lower priority given the current product goal:
-- dashboards
-- complex front-end work
-- heavy visualization layers
-- large platform rewrites before S3 Prometheus is online
-
-The report-first path is still the right focus.
-
-## Suggested Execution Order
-
-If we want the biggest payoff with the least architectural churn, the next work
-should happen in this order:
-
-1. get S3 Prometheus access and validate it end to end
-2. improve prompt/report behavior for confidence and sparse data
-3. expand automated coverage around parsers, anomaly logic, and prompt building
-4. bring in AlertManager and Redfish as they become available
-5. enable multi-node SSH to widen the report scope
-
-That sequence builds breadth without losing the reliability of the existing
-single-node path.
+1. S3 Prometheus access and end-to-end validation
+2. Prompt/report improvements for confidence and sparse data
+3. Test coverage for parsers, anomaly logic, and prompt building
+4. AlertManager and Redfish as access becomes available
+5. Multi-node SSH to widen the report scope
