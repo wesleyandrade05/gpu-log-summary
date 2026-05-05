@@ -7,6 +7,25 @@ report-first summarizer. The priorities below assume we want better report
 quality, broader telemetry coverage, and more reliable on-cluster operation
 without turning the project into a UI-heavy monitoring product.
 
+## Operational Constraint: Shared Storage and Model Hosting
+
+The original target model `Qwen/Qwen3.5-397B-A17B` lives on
+`/mnt/superalarm/models/`, a FUSE-backed mount that has been intermittently
+unreachable. When the mount hangs, vLLM workers enter uninterruptible
+kernel sleep (D state) and cannot be killed.
+
+In response, we switched the served model to `Qwen/Qwen3-235B-A22B-FP8`,
+which is cached locally under `~/.cache/huggingface/hub/` and has no FUSE
+dependency. See `docs/operations.md` ("Model Selection History" and issue
+#9) for the full reasoning, the diagnosis path, and how to switch back if
+the mount becomes reliable.
+
+This is not a project blocker — the pipeline runs unchanged on the new
+model. It is, however, a cluster-infrastructure dependency that is worth
+flagging in any final write-up.
+
+---
+
 ## Priority 1: Unlock Cluster-Wide Context
 
 ### 1. Complete S3 Prometheus integration

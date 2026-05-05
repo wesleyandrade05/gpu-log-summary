@@ -11,12 +11,14 @@ LOG_DIR="$PROJECT_DIR/logs"
 LOG_FILE="$LOG_DIR/vllm.log"
 mkdir -p "$LOG_DIR"
 
-MODEL_PATH="/mnt/superalarm/models/Qwen3.5-397B-A17B-FP8"
-MODEL_NAME="Qwen/Qwen3.5-397B-A17B"
-PORT=30000
-TP=8
-MAX_LEN=32768
-GPU_MEM_UTIL=0.70
+# All values can be overridden by environment variables.
+# Defaults use a model from the local HF cache (no /mnt dependencies).
+MODEL_PATH="${MODEL_PATH:-Qwen/Qwen3-235B-A22B-FP8}"
+MODEL_NAME="${MODEL_NAME:-$MODEL_PATH}"
+PORT="${PORT:-30000}"
+TP="${TP:-8}"
+MAX_LEN="${MAX_LEN:-32768}"
+GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.70}"
 
 if ! command -v tmux &>/dev/null; then
   echo "ERROR: tmux is not installed. Install it or start the server manually."

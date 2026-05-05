@@ -16,7 +16,7 @@ collection:
 
 llm:
   base_url: "http://localhost:30000/v1"
-  model: "Qwen/Qwen3.5-397B-A17B"
+  model: "Qwen/Qwen3-235B-A22B-FP8"
   max_tokens: 4096
   temperature: 0.3
 

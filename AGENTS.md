@@ -19,7 +19,7 @@ Today the pipeline is built around:
 
 The current target model on the cluster is:
 - endpoint: `http://localhost:30000/v1`
-- model: `Qwen/Qwen3.5-397B-A17B`
+- model: `Qwen/Qwen3-235B-A22B-FP8`
 
 ## Product Direction
 

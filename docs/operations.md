@@ -9,7 +9,7 @@ when something stops working.
 - Node: `gpu003`
 - Python: `python3.12`
 - Project venv: `~/class_projects/wesley-gpu-monitor/gpu-log-summary/.venv`
-- Model: `Qwen/Qwen3.5-397B-A17B` served from `/mnt/superalarm/models/Qwen3.5-397B-A17B-FP8`
+- Model: `Qwen/Qwen3-235B-A22B-FP8` (see model history below)
 - vLLM version: `0.18.0` (pinned — see version notes below)
 
 Always use the project venv for all CLI commands:
@@ -18,6 +18,81 @@ Always use the project venv for all CLI commands:
 cd ~/class_projects/wesley-gpu-monitor/gpu-log-summary
 .venv/bin/python -m src.cli <command>
 ```
+
+---
+
+## Model Selection History
+
+This section captures why the served model has changed over the lifetime of
+the project. The pipeline does not depend on any specific model — only on an
+OpenAI-compatible endpoint serving a capable instruction-tuned LLM. The
+report-quality difference between the candidates considered here is small
+relative to the operational constraints that drove each switch.
+
+### Initial target: `Qwen/Qwen3.5-397B-A17B`
+
+This was the model originally documented in `AGENTS.md`. It is a 397B-parameter
+MoE with 17B active parameters, FP8-quantized variant available at
+`/mnt/superalarm/models/Qwen3.5-397B-A17B-FP8`. We chose it for capability
+ceiling: a large MoE with strong reasoning was attractive for nuanced
+operational summaries.
+
+Two problems prevented sustained use:
+
+1. **Mount instability.** The model lives on `/mnt/superalarm/`, a FUSE-backed
+   mount that is intermittently unreachable from `gpu003`. When the mount
+   hangs, every `stat`/`open` syscall on a path under it blocks indefinitely
+   in kernel state `D` (uninterruptible sleep). vLLM workers are unable to
+   load shards, cannot be killed even with `kill -9`, and the only recovery
+   is for the mount to come back or for the node to be rebooted. This is
+   documented in detail in issue #9 below.
+2. **Loading footprint.** Even when the mount worked, loading 94 FP8 shards
+   across 8 GPUs took 5–10 minutes per restart, which made transient failures
+   especially expensive.
+
+### Replacement: `Qwen/Qwen3-235B-A22B-FP8`
+
+We replaced Qwen3.5-397B with `Qwen/Qwen3-235B-A22B-FP8` for the following
+reasons:
+
+- **Same family, comparable capability.** Both are Qwen MoE models with FP8
+  weights and similar instruction-following behavior on operational text.
+  235B with 22B active parameters is the closest available substitute and
+  is more than capable for telemetry summarization, anomaly narration, and
+  report generation.
+- **Lives in the local HuggingFace cache.** The weights are already present
+  under `~/.cache/huggingface/hub/models--Qwen--Qwen3-235B-A22B-FP8/`. No
+  `/mnt/superalarm/` dependency means no FUSE-related D-state hangs.
+- **Operationally identical to the project.** vLLM serves it on the same
+  port (30000) with the same OpenAI-compatible API. No code changes are
+  needed beyond `config.yaml` and `scripts/start_vllm.sh`. The pipeline
+  (collect → analyze → correlate → prompt → summarize) is unchanged.
+- **Still uses the full 8-GPU configuration** with `--tensor-parallel-size 8`,
+  preserving the scaling behavior we tested earlier.
+
+### Why this change does not weaken the project
+
+The summarizer's job is to produce conservative, high-signal operational
+reports given structured evidence. The dominant determinants of report
+quality, in our observed runs, are:
+
+1. Sample density of the collected telemetry (covered by the 5-minute cron).
+2. The structure of the prompt and the data-quality safeguards
+   (`docs/architecture.md`).
+3. The honesty of the system prompt about sparse data
+   (`src/summarizer/prompt_builder.py`).
+
+Within Qwen MoE family, the difference between 397B-A17B and 235B-A22B on
+this kind of structured summarization is small compared to what we gained
+in operational stability. Reports continue to be written to `reports/` in the
+same format, and the cron schedule (every 12 hours) is unchanged.
+
+### Switching back later
+
+If `/mnt/superalarm/` becomes reliably available again, switching back is a
+one-line change in `config.yaml` plus a matching `MODEL_PATH` /
+`MODEL_NAME` environment variable for `scripts/start_vllm.sh`. The rest of
+the pipeline does not need to change.
 
 ---
 
@@ -207,7 +282,42 @@ dependencies including a compatible `boto3` and `urllib3`.
 
 ---
 
-### 8. `no crontab for yale` after running `install_cron.sh`
+### 9. vLLM hangs forever, all worker processes stuck in D state on FUSE
+
+**Symptom:** vLLM startup never progresses past printing the banner. All `vllm`
+processes show state `D` (uninterruptible sleep). They cannot be killed even
+with `kill -9`. New `vllm serve` invocations hit the same state immediately.
+GPU memory shows `0 MiB` on every device.
+
+**Diagnosis:** Check the kernel stack of a stuck process:
+
+```bash
+sudo cat /proc/$(pgrep -f "vllm serve" | head -1)/stack
+```
+
+If you see `fuse_simple_request` and `fuse_lookup_name` in the stack, the
+backing FUSE filesystem (e.g. `/mnt/superalarm/`) is unreachable. The kernel
+will not return until the filesystem responds or the node reboots.
+
+**Resolution:**
+- Stop using paths under the broken mount. The default model in
+  `scripts/start_vllm.sh` and `config.yaml` is now
+  `Qwen/Qwen3-30B-A3B-Thinking-2507` which lives in the local HuggingFace
+  cache (`~/.cache/huggingface/hub/`) and has no FUSE dependency.
+- The zombie D-state processes will only clear when the FUSE mount returns
+  or the node is rebooted. Contact a cluster admin if it stays down.
+- Once the system is clean (`pgrep -f "vllm serve"` returns nothing),
+  start the server normally: `bash scripts/start_vllm.sh`.
+
+To override the default model temporarily without editing the script:
+
+```bash
+MODEL_PATH="Qwen/Qwen3-8B" bash scripts/start_vllm.sh
+```
+
+---
+
+### 10. `no crontab for yale` after running `install_cron.sh`
 
 **Symptom:** Running `crontab -l` immediately after `install_cron.sh` still
 shows this message.
