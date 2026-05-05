@@ -10,4 +10,10 @@ mkdir -p "$LOG_DIR"
 cd "$PROJECT_DIR"
 
 echo "--- $(date -u +%Y-%m-%dT%H:%M:%SZ) ---" >> "$LOG_DIR/summarize.log"
+
+if ! curl -s --max-time 5 http://localhost:30000/health > /dev/null 2>&1; then
+  echo "SKIP: vLLM not reachable on port 30000, skipping summary" >> "$LOG_DIR/summarize.log"
+  exit 0
+fi
+
 "$PROJECT_DIR/.venv/bin/python" -m src.cli summarize --hours 24 >> "$LOG_DIR/summarize.log" 2>&1
