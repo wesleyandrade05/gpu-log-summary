@@ -57,6 +57,19 @@ same family, FP8-quantized, and more than capable of the structured
 summarization this pipeline does. Switching back later is one config line
 plus one environment variable for `start_vllm.sh`.
 
+The second time we hit the LLM-serving layer was a home-directory quota
+exhaustion: vLLM downloads weights into `~/.cache/huggingface/hub/`, and on
+this cluster the home quota is too small to hold a fully-cached
+~250 GB FP8 model alongside an existing venv. Symptoms are
+`UserWarning: Not enough free disk space` followed by worker startup
+failures during `load_model`, and the same condition will eventually
+break unrelated tools (e.g. `git` failing with `index.lock write error.
+Out of diskspace`). Recovery is to clear partial downloads from
+`~/.cache/huggingface/hub/models--*` and choose a model whose footprint
+fits the available quota. This is an environment limit, not a project
+issue — the pipeline keeps collecting and skips summarization cleanly
+while the LLM is unreachable.
+
 ## vLLM serving constraints worth remembering
 
 - **TP=4, not 8.** The FP8 gate/up dimension is 1536. With TP=8 each shard

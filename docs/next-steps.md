@@ -3,17 +3,33 @@
 The follow-up work that would most improve the report-first summarizer,
 ordered roughly by impact.
 
-## Operational dependency to flag
+## Operational dependencies to flag
 
-The original target model (`Qwen/Qwen3.5-397B-A17B`) lives on a
-FUSE-backed cluster mount that is intermittently unreachable. When that
-mount hangs, vLLM workers enter uninterruptible kernel sleep and survive
-`kill -9`. The project now serves `Qwen/Qwen3-235B-A22B-FP8` from the
-local HuggingFace cache, which removes the FUSE dependency without
-changing the pipeline. The shared mount remains a cluster-infrastructure
-risk worth flagging in any final write-up. See `docs/operations.md` for
-the diagnosis path and the (one-line) rollback if the mount becomes
-reliable.
+Two infrastructure constraints have repeatedly disrupted the LLM-serving
+layer of this project. Neither is a code defect; both are worth
+mentioning in any final write-up because they shaped operational
+decisions.
+
+1. **Shared FUSE mount instability.** The original target model
+   (`Qwen/Qwen3.5-397B-A17B`) lives on `/mnt/superalarm/`, a FUSE-backed
+   mount that is intermittently unreachable. When it hangs, vLLM
+   workers enter uninterruptible kernel sleep and survive `kill -9`.
+   We replaced the model with `Qwen/Qwen3-235B-A22B-FP8` from the local
+   HuggingFace cache.
+2. **Home-directory quota exhaustion.** vLLM caches weights under
+   `~/.cache/huggingface/hub/`, and the home quota on this cluster is
+   too small to hold a fully-cached ~250 GB FP8 model alongside the
+   project venv. Partial downloads fail with `Not enough free disk
+   space`, and the exhausted quota cascades into unrelated tools
+   (e.g. `git` failing with `index.lock write error. Out of diskspace`).
+   Recovery is to clear partial downloads and pick a model whose
+   footprint fits the quota.
+
+Throughout both incidents the rest of the pipeline (collection, storage,
+analysis, prompt building, cron) kept running, and `run_summarize.sh`
+skipped cleanly while the LLM was unreachable — which is the report-first
+design behaving as intended. See `docs/operations.md` ("Model choice")
+for the diagnosis path and rollback notes.
 
 ## Priority 1 — unlock cluster-wide context
 
