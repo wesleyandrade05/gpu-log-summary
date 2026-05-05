@@ -282,6 +282,39 @@ dependencies including a compatible `boto3` and `urllib3`.
 
 ---
 
+### 9b. FP8 quantization block-size mismatch with TP=8
+
+**Symptom:** When serving `Qwen/Qwen3-235B-A22B-FP8` with `--tensor-parallel-size 8`,
+all 8 worker processes fail to start with:
+
+```
+ValueError: The output_size of gate's and up's weight = 192 is not divisible
+by weight quantization block_n = 128.
+```
+
+**Cause:** The model's FP8 gate/up projection has a hidden dimension of 1536.
+With TP=8, each GPU receives a 192-wide shard. FP8 block quantization
+requires shard dimensions divisible by `block_n = 128`. 192 is not.
+
+Valid TP values for this model:
+
+| TP | Shard size | Divisible by 128 |
+|----|-----------|------------------|
+| 1  | 1536      | yes              |
+| 2  | 768       | yes              |
+| 4  | 384       | yes              |
+| 8  | 192       | **no**           |
+
+**Resolution:** Use `--tensor-parallel-size 4`. The 250GB FP8 model fits
+comfortably on 4×143GB H200s. The remaining 4 GPUs stay idle for the LLM
+serving workload, which is acceptable for the project's inference rate
+(two reports every 24 hours). The default `TP` in `scripts/start_vllm.sh`
+is now 4 to reflect this.
+
+To override for a different model: `TP=2 bash scripts/start_vllm.sh`.
+
+---
+
 ### 9. vLLM hangs forever, all worker processes stuck in D state on FUSE
 
 **Symptom:** vLLM startup never progresses past printing the banner. All `vllm`

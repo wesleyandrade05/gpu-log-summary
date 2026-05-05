@@ -16,7 +16,10 @@ mkdir -p "$LOG_DIR"
 MODEL_PATH="${MODEL_PATH:-Qwen/Qwen3-235B-A22B-FP8}"
 MODEL_NAME="${MODEL_NAME:-$MODEL_PATH}"
 PORT="${PORT:-30000}"
-TP="${TP:-8}"
+# TP=4 (not 8) because the FP8 gate/up dimension (1536) must split into chunks
+# divisible by the FP8 block size of 128. With TP=8 each shard gets 192,
+# which is not divisible by 128 and vLLM rejects it. TP=4 → 384 ✓
+TP="${TP:-4}"
 MAX_LEN="${MAX_LEN:-32768}"
 GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.70}"
 
