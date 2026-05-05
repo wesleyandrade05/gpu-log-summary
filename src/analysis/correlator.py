@@ -12,7 +12,7 @@ form a single correlated incident.
 
 import logging
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Union
 
 logger = logging.getLogger(__name__)
@@ -51,17 +51,23 @@ SEVERITY_RANK = {"critical": 0, "warning": 1, "info": 2}
 
 
 def _parse_ts(ts_str: str) -> Optional[datetime]:
-    """Parse ISO timestamp, tolerating various formats."""
+    """Parse ISO timestamp, tolerating various formats. Always returns UTC-aware."""
+    dt = None
     for fmt in ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z",
                 "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S"):
         try:
-            return datetime.strptime(ts_str, fmt)
+            dt = datetime.strptime(ts_str, fmt)
+            break
         except ValueError:
             continue
-    try:
-        return datetime.fromisoformat(ts_str)
-    except (ValueError, TypeError):
-        return None
+    if dt is None:
+        try:
+            dt = datetime.fromisoformat(ts_str)
+        except (ValueError, TypeError):
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def _make_correlated_event(item: dict, event_type: str) -> Optional[CorrelatedEvent]:
