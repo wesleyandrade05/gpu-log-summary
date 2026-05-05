@@ -10,15 +10,13 @@ reports through an on-cluster vLLM-served `Qwen/Qwen3-235B-A22B-FP8` model.
 - Primary deliverable: human-readable operational reports
 - Current focus: local-node summarization on `gpu003`, with graceful expansion
   to optional cluster-wide sources
-- Non-goal right now: dashboards
 
 ## Important Execution Model
 
 This project is developed locally but executed and validated on the cluster.
 
 - edit code locally or through remote IDE workflows
-- run the pipeline on `gpu003`
-- do not treat the local editing environment as the runtime environment
+- run the pipeline on `gpu003` node in the cluster
 
 ## Quick Start On The Cluster
 
@@ -97,26 +95,6 @@ Generate a report:
 - `summarize`
   Build a prompt, call the local vLLM endpoint, and write a Markdown report.
 
-## Architecture Summary
-
-```text
-GPU metrics + system metrics + logs + optional remote sources
-                        |
-                        v
-                 SQLite persistence
-                        |
-                        v
-       anomaly detection + incident correlation
-                        |
-                        v
-         prompt building with data-quality safeguards
-                        |
-                        v
-        local vLLM summary generation via OpenAI API
-                        |
-                        v
-                 Markdown report output
-```
 
 ## Project Structure
 
