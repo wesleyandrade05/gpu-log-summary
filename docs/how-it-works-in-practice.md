@@ -24,8 +24,9 @@ It is:
 ### Collection cadence
 
 The intended steady-state path is:
-- `scripts/run_collect.sh` every 5 minutes
-- `scripts/run_summarize.sh` once per day at `06:00 UTC`
+- `scripts/run_collect.sh` every 5 minutes via cron
+- `scripts/run_summarize.sh` every 12 hours at `00:00` and `12:00 UTC`
+- vLLM server running as a persistent systemd user service (see `docs/operations.md`)
 
 That means the database becomes the day’s fact store, and the report is a
 derived artifact built later from those accumulated facts.
@@ -64,8 +65,8 @@ Most practical debugging and usage falls into a few loops.
 If something feels broken, start here:
 
 ```bash
-python3 -m src.cli probe
-python3 -m src.cli status
+.venv/bin/python -m src.cli probe
+.venv/bin/python -m src.cli status
 ```
 
 This tells you whether:
@@ -79,8 +80,8 @@ This tells you whether:
 If the report looks suspicious, inspect the raw material:
 
 ```bash
-python3 -m src.cli show --hours 1
-python3 -m src.cli show --events --hours 1
+.venv/bin/python -m src.cli show --hours 1
+.venv/bin/python -m src.cli show --events --hours 1
 ```
 
 This is how you answer questions like:
@@ -94,7 +95,7 @@ This is how you answer questions like:
 If the final report feels off, the highest-value check is:
 
 ```bash
-python3 -m src.cli summarize --hours 1 --dry-run
+.venv/bin/python -m src.cli summarize --hours 1 --dry-run
 ```
 
 In practice, many “LLM issues” turn out to be one of these:
